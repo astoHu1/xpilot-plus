@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          submodules: recursive 
+          submodules: true
 
       - name: Delete dummy auth library
         shell: bash
