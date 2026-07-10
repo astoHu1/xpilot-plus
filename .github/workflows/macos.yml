@@ -75,7 +75,28 @@ jobs:
           echo "QT_PLUGIN_PATH=$(pwd)/qt6/6.5.2/macos/plugins" >> $GITHUB_ENV
           echo "QML2_IMPORT_PATH=$(pwd)/qt6/6.5.2/macos/qml" >> $GITHUB_ENV
           echo "$(pwd)/qt6/6.5.2/macos/bin" >> $GITHUB_PATH
-          find qt6/6.5.2/macos/lib -type f \( -name '*.cmake' -o -name '*.prl' \) -exec sed -i '' 's/-framework AGL//g; /WrapOpenGL_AGL/d; /__opengl_agl_fw_path/d' {} +
+          python3 - <<'PY'
+          from pathlib import Path
+
+          qt_lib = Path("qt6/6.5.2/macos/lib")
+          finder = qt_lib / "cmake/Qt6/FindWrapOpenGL.cmake"
+          text = finder.read_text()
+          block = '''        find_library(WrapOpenGL_AGL NAMES AGL)
+                  if(WrapOpenGL_AGL)
+                      set(__opengl_agl_fw_path "${WrapOpenGL_AGL}")
+                  endif()
+                  if(NOT __opengl_agl_fw_path)
+                      set(__opengl_agl_fw_path "-framework AGL")
+                  endif()
+
+          '''
+          text = text.replace(block, "")
+          text = text.replace("        target_link_libraries(WrapOpenGL::WrapOpenGL INTERFACE ${__opengl_agl_fw_path})\n", "")
+          finder.write_text(text)
+
+          for path in qt_lib.glob("*.prl"):
+              path.write_text(path.read_text().replace("-framework AGL", ""))
+          PY
           chmod -R +x qt6
 
       - name: Build client
