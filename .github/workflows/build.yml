@@ -3,6 +3,8 @@ name: "Build xPilot (Release)"
 on:
   workflow_dispatch:
   push:
+    branches:
+      - master
     tags:
       - "v*"
 

@@ -216,7 +216,6 @@ target_link_libraries(${PROJECT_NAME}
     Qt${QT_MAJOR_VERSION}::Network
     Qt${QT_MAJOR_VERSION}::Svg
     Qt${QT_MAJOR_VERSION}::Widgets
-    Qt${QT_MAJOR_VERSION}::qmlfolderlistmodelplugin
     Qt${QT_MAJOR_VERSION}::Multimedia
     ${LIB_OPUS}
     ${LIB_EVENT}
