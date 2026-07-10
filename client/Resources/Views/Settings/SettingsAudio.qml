@@ -50,8 +50,10 @@ Item {
         switchEnableHfSquelch.checked = AppConfig.HFSquelchEnabled
         switchDisableRadioEffects.checked = AppConfig.AudioEffectsDisabled
         switchAircraftVolumeKnobs.checked = AppConfig.AircraftRadioStackControlsVolume
+        switchAutoOutputBalance.checked = AppConfig.AutoOutputVolumeBalance
         com1Slider.volume = AppConfig.Com1Volume
         com2Slider.volume = AppConfig.Com2Volume
+        autoOutputBalanceStrength.volume = AppConfig.AutoOutputVolumeBalanceStrength
         microphoneVolume.volume = AppConfig.MicrophoneVolume
     }
 
@@ -171,6 +173,20 @@ Item {
                     }
                 }
 
+                CustomSwitch {
+                    id: switchAutoOutputBalance
+                    text: "Auto Balance Incoming Voice Volume"
+                    font.pixelSize: 13
+                    Layout.maximumWidth: 300
+                    leftPadding: 0
+                    tooltipText: "Automatically reduce combined receive loudness when multiple radios are active"
+                    onCheckedChanged: {
+                        AppConfig.AutoOutputVolumeBalance = switchAutoOutputBalance.checked
+                        audio.setAutoOutputVolumeBalance(switchAutoOutputBalance.checked)
+                        applyChanges()
+                    }
+                }
+
                 VolumeSlider {
                     id: com1Slider
                     comLabel: "COM1"
@@ -188,6 +204,17 @@ Item {
                         applyChanges()
                         AppConfig.Com2Volume = volume
                         audio.setCom2Volume(volume)
+                    }
+                }
+
+                VolumeSlider {
+                    id: autoOutputBalanceStrength
+                    comLabel: "Balance"
+                    enabled: switchAutoOutputBalance.checked
+                    onVolumeValueChanged: function(volume) {
+                        applyChanges()
+                        AppConfig.AutoOutputVolumeBalanceStrength = volume
+                        audio.setAutoOutputVolumeBalanceStrength(volume)
                     }
                 }
             }

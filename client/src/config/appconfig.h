@@ -78,6 +78,8 @@ namespace xpilot
         bool SplitAudioChannels;
         int Com1Volume = 50;
         int Com2Volume = 50;
+        bool AutoOutputVolumeBalance;
+        int AutoOutputVolumeBalanceStrength;
         int MicrophoneVolume = 0;
         bool AudioEffectsDisabled;
         bool HFSquelchEnabled;
@@ -133,6 +135,8 @@ namespace xpilot
         Q_PROPERTY(bool SplitAudioChannels READ getSplitAudioChannels WRITE setSplitAudioChannels NOTIFY splitAudioChannelsChanged)
         Q_PROPERTY(int Com1Volume READ getCom1Volume WRITE setCom1Volume NOTIFY com1VolumeChanged)
         Q_PROPERTY(int Com2Volume READ getCom2Volume WRITE setCom2Volume NOTIFY com2VolumeChanged)
+        Q_PROPERTY(bool AutoOutputVolumeBalance READ getAutoOutputVolumeBalance WRITE setAutoOutputVolumeBalance NOTIFY autoOutputVolumeBalanceChanged)
+        Q_PROPERTY(int AutoOutputVolumeBalanceStrength READ getAutoOutputVolumeBalanceStrength WRITE setAutoOutputVolumeBalanceStrength NOTIFY autoOutputVolumeBalanceStrengthChanged)
         Q_PROPERTY(int MicrophoneVolume READ getMicrophoneVolume WRITE setMicrophoneVolume NOTIFY microphoneVolumeChanged)
         Q_PROPERTY(bool AudioEffectsDisabled READ getAudioEffectsDisabled WRITE setAudioEffectsDisabled NOTIFY audioEffectsDisabledChanged)
         Q_PROPERTY(bool HFSquelchEnabled READ getHFSquelchEnabled WRITE setHFSquelchEnabled NOTIFY hfSquelchEnabledChanged)
@@ -172,6 +176,8 @@ namespace xpilot
         void setSplitAudioChannels(bool value) { tempSplitAudioChannels = value; }
         void setCom1Volume(int value) { tempCom1Volume = value; }
         void setCom2Volume(int value) { tempCom2Volume = value; }
+        void setAutoOutputVolumeBalance(bool value) { tempAutoOutputVolumeBalance = value; }
+        void setAutoOutputVolumeBalanceStrength(int value) { tempAutoOutputVolumeBalanceStrength = value; }
         void setMicrophoneVolume(int value) { tempMicrophoneVolume = value; }
         void setAudioEffectsDisabled(bool value) { tempAudioEffectsDisabled = value; }
         void setHFSquelchEnabled(bool value) { tempHFSquelchEnabled = value; }
@@ -200,6 +206,8 @@ namespace xpilot
         bool getSplitAudioChannels() const { return SplitAudioChannels; }
         int getCom1Volume() const { return Com1Volume; }
         int getCom2Volume() const { return Com2Volume; }
+        bool getAutoOutputVolumeBalance() const { return AutoOutputVolumeBalance; }
+        int getAutoOutputVolumeBalanceStrength() const { return AutoOutputVolumeBalanceStrength; }
         int getMicrophoneVolume() const { return MicrophoneVolume; }
         bool getAudioEffectsDisabled() const { return AudioEffectsDisabled; }
         bool getHFSquelchEnabled() const { return HFSquelchEnabled; }
@@ -229,6 +237,8 @@ namespace xpilot
         void splitAudioChannelsChanged();
         void com1VolumeChanged();
         void com2VolumeChanged();
+        void autoOutputVolumeBalanceChanged();
+        void autoOutputVolumeBalanceStrengthChanged();
         void microphoneVolumeChanged();
         void audioEffectsDisabledChanged();
         void hfSquelchEnabledChanged();
@@ -262,6 +272,8 @@ namespace xpilot
         bool tempSplitAudioChannels;
         int tempCom1Volume;
         int tempCom2Volume;
+        bool tempAutoOutputVolumeBalance;
+        int tempAutoOutputVolumeBalanceStrength;
         int tempMicrophoneVolume;
         bool tempAudioEffectsDisabled;
         bool tempHFSquelchEnabled;

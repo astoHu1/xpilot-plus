@@ -129,6 +129,11 @@ source_group("AFV Headers" FILES ${afv_HEADERS})
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/afv-native/src")
 source_group("AFV Sources" FILES ${afv_SRC})
 
+if(APPLE)
+    target_include_directories(${PROJECT_NAME} PRIVATE /opt/homebrew/opt/speexdsp/include)
+    target_include_directories(${PROJECT_NAME} PRIVATE /opt/homebrew/opt/opus/include)
+endif()
+
 # Include the /src/ directory as a system include directory
 target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/src)
 

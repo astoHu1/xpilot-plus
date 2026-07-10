@@ -164,6 +164,8 @@ namespace xpilot
         m_client->setEnableInputFilters(true);
         m_client->setEnableOutputEffects(!AppConfig::getInstance()->AudioEffectsDisabled);
         m_client->setEnableHfSquelch(AppConfig::getInstance()->HFSquelchEnabled);
+        m_client->setAutoOutputGain(AppConfig::getInstance()->AutoOutputVolumeBalance);
+        m_client->setAutoOutputGainStrength(AppConfig::getInstance()->AutoOutputVolumeBalanceStrength / 100.0f);
 
         configureAudioDevices();
         setMicrophoneVolume(AppConfig::getInstance()->MicrophoneVolume);
@@ -173,8 +175,11 @@ namespace xpilot
         connect(&m_audioDevicesTimer, &QTimer::timeout, this, &AudioForVatsim::OnAudioDevicesTimer);
         connect(&m_transceiverTimer, &QTimer::timeout, this, &AudioForVatsim::OnTransceiverTimer);
         connect(&m_rxTxQueryTimer, &QTimer::timeout, this, [&]{
-            emit radioRxChanged(0, m_radioStackState.Com1ReceiveEnabled && m_client->getRxActive(0));
-            emit radioRxChanged(1, m_radioStackState.Com2ReceiveEnabled && m_client->getRxActive(1));
+            bool com1Rx = m_radioStackState.Com1ReceiveEnabled && m_client->getRxActive(0);
+            bool com2Rx = m_radioStackState.Com2ReceiveEnabled && m_client->getRxActive(1);
+
+            emit radioRxChanged(0, com1Rx);
+            emit radioRxChanged(1, com2Rx);
 
             m_xplaneAdapter.setComRxDataref(0, m_client->getRxActive(0));
             m_xplaneAdapter.setComRxDataref(1, m_client->getRxActive(1));
@@ -335,7 +340,8 @@ namespace xpilot
         if(v < 0) v = 0;
         if(v > 100) v = 100;
 
-        m_client->setRadioGain(0, ScaleVolume(v / 100.0f));
+        m_com1BaseVolume = v;
+        updateRadioGain(0);
 
         AppConfig::getInstance()->Com1Volume = v;
         AppConfig::getInstance()->saveConfig();
@@ -347,9 +353,25 @@ namespace xpilot
         if(v < 0) v = 0;
         if(v > 100) v = 100;
 
-        m_client->setRadioGain(1, ScaleVolume(v / 100.0f));
+        m_com2BaseVolume = v;
+        updateRadioGain(1);
 
         AppConfig::getInstance()->Com2Volume = v;
+        AppConfig::getInstance()->saveConfig();
+    }
+
+    void AudioForVatsim::setAutoOutputVolumeBalance(bool enabled)
+    {
+        AppConfig::getInstance()->AutoOutputVolumeBalance = enabled;
+        m_client->setAutoOutputGain(enabled);
+        AppConfig::getInstance()->saveConfig();
+    }
+
+    void AudioForVatsim::setAutoOutputVolumeBalanceStrength(int strength)
+    {
+        int clamped = qBound(0, strength, 100);
+        AppConfig::getInstance()->AutoOutputVolumeBalanceStrength = clamped;
+        m_client->setAutoOutputGainStrength(clamped / 100.0f);
         AppConfig::getInstance()->saveConfig();
     }
 
@@ -546,6 +568,17 @@ namespace xpilot
         m_xplaneAdapter.setSplitAudioChannels(split);
 
         AppConfig::getInstance()->saveConfig();
+    }
+
+    void AudioForVatsim::updateRadioGain(unsigned int radio)
+    {
+        m_client->setRadioGain(radio, getBaseRadioGain(radio));
+    }
+
+    float AudioForVatsim::getBaseRadioGain(unsigned int radio) const
+    {
+        double volume = radio == 0 ? m_com1BaseVolume : m_com2BaseVolume;
+        return ScaleVolume(qBound(0.0, volume, 100.0) / 100.0f);
     }
 
     void AudioForVatsim::settingsWindowOpened()

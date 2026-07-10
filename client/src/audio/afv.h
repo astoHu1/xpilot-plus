@@ -97,6 +97,8 @@ namespace xpilot
         Q_INVOKABLE void setCom2Volume(double volume);
         Q_INVOKABLE void disableAudioEffects(bool disabled);
         Q_INVOKABLE void enableHfSquelch(bool enabled);
+        Q_INVOKABLE void setAutoOutputVolumeBalance(bool enabled);
+        Q_INVOKABLE void setAutoOutputVolumeBalanceStrength(int strength);
         Q_INVOKABLE void setMicrophoneVolume(int volume);
         Q_INVOKABLE void setOnHeadset(unsigned int radio, bool onHeadset);
         Q_INVOKABLE void settingsWindowOpened();
@@ -119,6 +121,8 @@ namespace xpilot
     private:
         void configureAudioDevices();
         void updateTransceivers();
+        void updateRadioGain(unsigned int radio);
+        float getBaseRadioGain(unsigned int radio) const;
 
     private:
         XplaneAdapter& m_xplaneAdapter;
@@ -136,8 +140,8 @@ namespace xpilot
         QFile m_afvLog;
         QTextStream m_logDataStream;
 
-        bool m_com1Rx = false;
-        bool m_com2Rx = false;
+        double m_com1BaseVolume = 50.0;
+        double m_com2BaseVolume = 50.0;
 
         bool m_voiceTransmitDisabled = false;
         void EnableVoiceTransmit();

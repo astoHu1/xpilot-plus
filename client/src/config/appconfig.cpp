@@ -100,6 +100,8 @@ void AppConfig::loadConfig()
         AutoModeC = true;
         Com1Volume = 50;
         Com2Volume = 50;
+        AutoOutputVolumeBalance = true;
+        AutoOutputVolumeBalanceStrength = 60;
         Com1OnHeadset = true;
         Com2OnHeadset = true;
         MicrophoneVolume = 0;
@@ -146,6 +148,8 @@ void AppConfig::loadConfig()
     SplitAudioChannels = getJsonValue(jsonMap, "SplitAudioChannels", false);
     Com1Volume = qMin(qMax(getJsonValue<int>(jsonMap, "Com1Volume", 50), 0), 100);
     Com2Volume = qMin(qMax(getJsonValue<int>(jsonMap, "Com2Volume", 50), 0), 100);
+    AutoOutputVolumeBalance = getJsonValue(jsonMap, "AutoOutputVolumeBalance", true);
+    AutoOutputVolumeBalanceStrength = qMin(qMax(getJsonValue<int>(jsonMap, "AutoOutputVolumeBalanceStrength", 60), 0), 100);
     Com1OnHeadset = getJsonValue(jsonMap, "Com1OnHeadset", true);
     Com2OnHeadset = getJsonValue(jsonMap, "Com2OnHeadset", true);
     MicrophoneVolume = qMin(qMax(getJsonValue(jsonMap, "MicrophoneVolume", 0), -60), 18);
@@ -234,6 +238,8 @@ bool AppConfig::saveConfig()
     jsonObj["SplitAudioChannels"] = SplitAudioChannels;
     jsonObj["Com1Volume"] = qMin(qMax(Com1Volume, 0), 100);
     jsonObj["Com2Volume"] = qMin(qMax(Com2Volume, 0), 100);
+    jsonObj["AutoOutputVolumeBalance"] = AutoOutputVolumeBalance;
+    jsonObj["AutoOutputVolumeBalanceStrength"] = qMin(qMax(AutoOutputVolumeBalanceStrength, 0), 100);
     jsonObj["Com1OnHeadset"] = Com1OnHeadset;
     jsonObj["Com2OnHeadset"] = Com2OnHeadset;
     jsonObj["MicrophoneVolume"] = qMin(qMax(MicrophoneVolume, -60), 18);
@@ -322,6 +328,8 @@ void AppConfig::applySettings()
     SplitAudioChannels = tempSplitAudioChannels;
     Com1Volume = tempCom1Volume;
     Com2Volume = tempCom2Volume;
+    AutoOutputVolumeBalance = tempAutoOutputVolumeBalance;
+    AutoOutputVolumeBalanceStrength = tempAutoOutputVolumeBalanceStrength;
     MicrophoneVolume = tempMicrophoneVolume;
     AudioEffectsDisabled = tempAudioEffectsDisabled;
     HFSquelchEnabled = tempHFSquelchEnabled;
@@ -364,6 +372,8 @@ void AppConfig::setInitialTempValues()
     tempSplitAudioChannels = SplitAudioChannels;
     tempCom1Volume = Com1Volume;
     tempCom2Volume = Com2Volume;
+    tempAutoOutputVolumeBalance = AutoOutputVolumeBalance;
+    tempAutoOutputVolumeBalanceStrength = AutoOutputVolumeBalanceStrength;
     tempMicrophoneVolume = MicrophoneVolume;
     tempAudioEffectsDisabled = AudioEffectsDisabled;
     tempHFSquelchEnabled = HFSquelchEnabled;
