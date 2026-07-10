@@ -27,6 +27,7 @@ jobs:
           submodules: true
 
       - name: Load developer certificate
+        if: ${{ secrets.APPLE_SIGNING_CERTIFICATE != '' }}
         env:
           CERTIFICATE: ${{ secrets.APPLE_SIGNING_CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
@@ -62,20 +63,18 @@ jobs:
       ### Build Client ###
 
       - name: Download Qt
-        uses: robinraju/release-downloader@v1.6
-        with:
-          repository: "xpilot-project/qt6"
-          tag: ${{ env.QT_VERSION }}
-          fileName: "macos.7z"
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        run: |
+          python3 -m venv /tmp/aqt-venv
+          source /tmp/aqt-venv/bin/activate
+          python -m pip install aqtinstall
+          python -m aqt install-qt mac desktop 6.5.2 clang_64 -m qtmultimedia --outputdir ${{ github.workspace }}/qt6
 
       - name: Setup Qt
         run: |
-          7z x -oqt6 macos.7z
-          echo "Qt6_DIR=$(pwd)/qt6" >> $GITHUB_ENV
-          echo "QT_PLUGIN_PATH=$(pwd)/qt6/plugins" >> $GITHUB_ENV
-          echo "QML2_IMPORT_PATH=$(pwd)/qt6/qml" >> $GITHUB_ENV
-          echo "$(pwd)/qt6/bin" >> $GITHUB_PATH
+          echo "Qt6_DIR=$(pwd)/qt6/6.5.2/macos" >> $GITHUB_ENV
+          echo "QT_PLUGIN_PATH=$(pwd)/qt6/6.5.2/macos/plugins" >> $GITHUB_ENV
+          echo "QML2_IMPORT_PATH=$(pwd)/qt6/6.5.2/macos/qml" >> $GITHUB_ENV
+          echo "$(pwd)/qt6/6.5.2/macos/bin" >> $GITHUB_PATH
           chmod -R +x qt6
 
       - name: Build client
@@ -94,6 +93,7 @@ jobs:
           cmake --build . --config ${{ env.BUILD_TYPE }}
 
       - name: Code sign application
+        if: ${{ secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
         working-directory: ${{ env.CLIENT_DIR }}/build
         run: |
           codesign --force --options runtime --timestamp --sign "${{ secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY }}" --entitlements ../entitlements.plist xPilot.app
@@ -104,6 +104,7 @@ jobs:
           echo "XPILOT_VERSION=$(cat xpilot.json | jq -r 'if .is_beta == true then "\(.version.major).\(.version.minor).\(.version.patch)-beta.\(.beta_number)" else "\(.version.major).\(.version.minor).\(.version.patch)" end')" >> $GITHUB_ENV
 
       - name: Setup InstallBuilder
+        if: ${{ secrets.INSTALLBUILDER_LICENSE != '' && secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
         shell: bash
         run: |
           curl -k -L ${{ env.IB_URL }} --output ib.dmg
@@ -115,6 +116,7 @@ jobs:
           echo "PLUGIN_BUILD_DIR=${{ github.workspace }}/xPilot" >> $GITHUB_ENV
 
       - name: Create installer
+        if: ${{ secrets.INSTALLBUILDER_LICENSE != '' && secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
         shell: bash
         run: |
           ../ib/bin/builder build installer/macos.xml \
@@ -125,14 +127,17 @@ jobs:
               --setvars password=${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
 
       - name: Notarize installer
+        if: ${{ secrets.NOTARIZATION_USERNAME != '' && secrets.NOTARIZATION_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
         shell: bash
         run: xcrun notarytool submit xPilot.dmg --apple-id "${{ secrets.NOTARIZATION_USERNAME }}" --password "${{ secrets.NOTARIZATION_PASSWORD }}" --team-id "${{ secrets.APPLE_TEAM_ID }}"
 
       - name: Rename dmg
+        if: ${{ secrets.INSTALLBUILDER_LICENSE != '' && secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
         run: |
           mv xPilot.dmg xPilot-${{ env.XPILOT_VERSION }}-MacOS.dmg
 
       - name: Upload installer artifact
+        if: ${{ secrets.INSTALLBUILDER_LICENSE != '' && secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: xPilot-${{ env.XPILOT_VERSION }}-MacOS.zip
@@ -140,6 +145,7 @@ jobs:
             xPilot-${{ env.XPILOT_VERSION }}-MacOS.dmg
 
       - name: Create artifacts archive
+        if: ${{ secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
         run: |
           mkdir -p macos/plugin
           cp -R ${{ github.workspace }}/xPilot macos/plugin/
@@ -148,10 +154,12 @@ jobs:
           zip -r ../macOS.zip plugin xPilot.app
 
       - name: Notarize artifacts archive
+        if: ${{ secrets.NOTARIZATION_USERNAME != '' && secrets.NOTARIZATION_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
         run: |
           xcrun notarytool submit macOS.zip --apple-id "${{ secrets.NOTARIZATION_USERNAME }}" --password "${{ secrets.NOTARIZATION_PASSWORD }}" --team-id "${{ secrets.APPLE_TEAM_ID }}"
 
       - name: Upload artifacts
+        if: ${{ secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: macOS.zip
