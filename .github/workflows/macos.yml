@@ -75,7 +75,7 @@ jobs:
           echo "QT_PLUGIN_PATH=$(pwd)/qt6/6.5.2/macos/plugins" >> $GITHUB_ENV
           echo "QML2_IMPORT_PATH=$(pwd)/qt6/6.5.2/macos/qml" >> $GITHUB_ENV
           echo "$(pwd)/qt6/6.5.2/macos/bin" >> $GITHUB_PATH
-          sed -i '' '/find_library(WrapOpenGL_AGL NAMES AGL)/,/endif()/d' qt6/6.5.2/macos/lib/cmake/Qt6/FindWrapOpenGL.cmake
+          find qt6/6.5.2/macos/lib -type f \( -name '*.cmake' -o -name '*.prl' \) -exec sed -i '' 's/-framework AGL//g; /WrapOpenGL_AGL/d; /__opengl_agl_fw_path/d' {} +
           chmod -R +x qt6
 
       - name: Build client
