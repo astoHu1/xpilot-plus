@@ -26,17 +26,6 @@ jobs:
         with:
           submodules: true
 
-      - name: Delete dummy auth library
-        shell: bash
-        run: rm -rf dependencies/vatsim-auth
-
-      - name: Checkout auth library
-        uses: actions/checkout@v3
-        with:
-          repository: xpilot-project/vatsim-auth
-          path: dependencies/vatsim-auth
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-
       - name: Load developer certificate
         env:
           CERTIFICATE: ${{ secrets.APPLE_SIGNING_CERTIFICATE }}
