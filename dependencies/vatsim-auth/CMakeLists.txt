@@ -12,14 +12,6 @@ endif()
 
 if(WIN32)
     set(CMAKE_CXX_EXTENSIONS OFF)
-
-    if(CMAKE_BUILD_TYPE STREQUAL "Release")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MT")
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
-    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MTd")
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDebug")
-    endif()
 endif()
 
 add_library(vatsim-auth STATIC src/vatsimauth.cpp)
