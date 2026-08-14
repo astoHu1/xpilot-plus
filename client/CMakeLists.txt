@@ -45,6 +45,7 @@ string(JSON BETA_NUMBER GET ${XPILOT_JSON} beta_number)
 string(JSON VERSION_MAJOR GET ${XPILOT_JSON} version major)
 string(JSON VERSION_MINOR GET ${XPILOT_JSON} version minor)
 string(JSON VERSION_PATCH GET ${XPILOT_JSON} version patch)
+set(XPILOT_VERSION "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}")
 
 if (IS_BETA_VERSION)
     set(IS_BETA_VERSION true)
@@ -188,7 +189,11 @@ include_directories(
 )
 
 if(APPLE)
-    set_target_properties(${PROJECT_NAME} PROPERTIES MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/Info.plist")
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/Info.plist"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${XPILOT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${XPILOT_VERSION}"
+    )
     target_link_libraries(${PROJECT_NAME}
         PUBLIC
         ${COREFOUNDATION}

@@ -6,6 +6,8 @@
 		<string>xPilot</string>
 		<key>CFBundleDisplayName</key>
 		<string>xPilot</string>
+		<key>CFBundleExecutable</key>
+		<string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
 		<key>CFBundleGetInfoString</key>
 		<string>X-Plane pilot client for VATSIM</string>
 		<key>CFBundleIconFile</key>
@@ -14,6 +16,10 @@
 		<string>org.vatsim.xpilot</string>
 		<key>CFBundlePackageType</key>
 		<string>APPL</string>
+		<key>CFBundleShortVersionString</key>
+		<string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+		<key>CFBundleVersion</key>
+		<string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
 		<key>NSPrincipalClass</key>
 		<string>NSApplication</string>
 		<key>NSHighResolutionCapable</key>

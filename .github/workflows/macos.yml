@@ -66,6 +66,20 @@ jobs:
           install_name_tool -id @executable_path/../../../Resources/plugins/xPilot/mac_x64/libfmod.dylib libfmod.dylib
           install_name_tool -change @rpath/libfmod.dylib @executable_path/../../../Resources/plugins/xPilot/mac_x64/libfmod.dylib xPilot.xpl
 
+      - name: Code sign plugin
+        working-directory: ${{ github.workspace }}/xPilot/mac_x64
+        shell: bash
+        run: |
+          if [[ -n "${APPLE_SIGNING_CERTIFICATE_IDENTITY}" ]]; then
+            codesign --force --options runtime --timestamp --sign "${APPLE_SIGNING_CERTIFICATE_IDENTITY}" libfmod.dylib
+            codesign --force --options runtime --timestamp --sign "${APPLE_SIGNING_CERTIFICATE_IDENTITY}" xPilot.xpl
+          else
+            codesign --force --sign - libfmod.dylib
+            codesign --force --sign - xPilot.xpl
+          fi
+          codesign --verify --strict libfmod.dylib
+          codesign --verify --strict xPilot.xpl
+
       ### Build Client ###
 
       - name: Download Qt
@@ -120,11 +134,31 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MIN_OS_VERSION }}
           cmake --build . --config ${{ env.BUILD_TYPE }}
 
-      - name: Code sign application
-        if: ${{ env.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
-        working-directory: ${{ env.CLIENT_DIR }}/build
+      - name: Deploy application
+        shell: bash
         run: |
-          codesign --force --options runtime --timestamp --sign "${{ secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY }}" --entitlements ../entitlements.plist xPilot.app
+          ./scripts/package_macos.sh \
+            "${CLIENT_DIR}/build/xPilot.app" \
+            "${CLIENT_DIR}/Resources" \
+            "${CLIENT_DIR}/entitlements.plist" \
+            "${APPLE_SIGNING_CERTIFICATE_IDENTITY}"
+
+      - name: Verify application bundle
+        shell: bash
+        run: ./scripts/verify_macos_app.sh "${CLIENT_DIR}/build/xPilot.app"
+
+      - name: Notarize application bundle
+        if: ${{ env.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' && env.NOTARIZATION_USERNAME != '' && env.NOTARIZATION_PASSWORD != '' && env.APPLE_TEAM_ID != '' }}
+        shell: bash
+        run: |
+          ditto -c -k --keepParent "${CLIENT_DIR}/build/xPilot.app" xPilot-notarization.zip
+          xcrun notarytool submit xPilot-notarization.zip \
+            --apple-id "${NOTARIZATION_USERNAME}" \
+            --password "${NOTARIZATION_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait
+          xcrun stapler staple "${CLIENT_DIR}/build/xPilot.app"
+          xcrun stapler validate "${CLIENT_DIR}/build/xPilot.app"
 
       - name: Get version
         shell: bash
@@ -155,9 +189,16 @@ jobs:
               --setvars password=${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
 
       - name: Notarize installer
-        if: ${{ env.NOTARIZATION_USERNAME != '' && env.NOTARIZATION_PASSWORD != '' && env.APPLE_TEAM_ID != '' }}
+        if: ${{ env.IB_LICENSE != '' && env.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' && env.NOTARIZATION_USERNAME != '' && env.NOTARIZATION_PASSWORD != '' && env.APPLE_TEAM_ID != '' }}
         shell: bash
-        run: xcrun notarytool submit xPilot.dmg --apple-id "${{ secrets.NOTARIZATION_USERNAME }}" --password "${{ secrets.NOTARIZATION_PASSWORD }}" --team-id "${{ secrets.APPLE_TEAM_ID }}"
+        run: |
+          xcrun notarytool submit xPilot.dmg \
+            --apple-id "${NOTARIZATION_USERNAME}" \
+            --password "${NOTARIZATION_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait
+          xcrun stapler staple xPilot.dmg
+          xcrun stapler validate xPilot.dmg
 
       - name: Rename dmg
         if: ${{ env.IB_LICENSE != '' && env.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
@@ -177,13 +218,14 @@ jobs:
           mkdir -p macos/plugin
           cp -R ${{ github.workspace }}/xPilot macos/plugin/
           cp -R ${{ env.CLIENT_DIR }}/build/xPilot.app macos/xPilot.app
-          cd macos
-          zip -r ../macOS.zip plugin xPilot.app
+          ditto -c -k --sequesterRsrc macos macOS.zip
 
-      - name: Notarize artifacts archive
-        if: ${{ env.NOTARIZATION_USERNAME != '' && env.NOTARIZATION_PASSWORD != '' && env.APPLE_TEAM_ID != '' }}
+      - name: Verify archived application bundle
+        shell: bash
         run: |
-          xcrun notarytool submit macOS.zip --apple-id "${{ secrets.NOTARIZATION_USERNAME }}" --password "${{ secrets.NOTARIZATION_PASSWORD }}" --team-id "${{ secrets.APPLE_TEAM_ID }}"
+          ARCHIVE_CHECK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/xpilot-archive.XXXXXX")
+          ditto -x -k macOS.zip "$ARCHIVE_CHECK_DIR"
+          ./scripts/verify_macos_app.sh "$ARCHIVE_CHECK_DIR/xPilot.app"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
