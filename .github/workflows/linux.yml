@@ -14,7 +14,7 @@ env:
   PLUGIN_DIR: ${{ github.workspace }}/plugin
   IB_URL: https://releases.installbuilder.com/installbuilder/installbuilder-enterprise-24.3.0-linux-x64-installer.run
   IB_LICENSE: ${{ secrets.INSTALLBUILDER_LICENSE }}
-  QT_VERSION: "v6.5.2"
+  QT_VERSION: "6.5.2"
 
 jobs:
   build:
@@ -28,20 +28,9 @@ jobs:
           libglu1-mesa-dev freeglut3-dev mesa-common-dev libglfw3-dev libgles2-mesa-dev \
           libpulse-dev
 
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
         with:
           submodules: true
-
-      - name: Delete dummy auth library
-        shell: bash
-        run: rm -rf dependencies/vatsim-auth
-
-      - name: Checkout auth library
-        uses: actions/checkout@v3
-        with:
-          repository: xpilot-project/vatsim-auth
-          path: dependencies/vatsim-auth
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
         ### Buid Plugin ###
 
@@ -75,20 +64,16 @@ jobs:
       ### Build Client ###
 
       - name: Download Qt
-        uses: robinraju/release-downloader@v1.6
-        with:
-          repository: "xpilot-project/qt6"
-          tag: ${{ env.QT_VERSION }}
-          fileName: "linux.7z"
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        run: |
+          python3 -m pip install --disable-pip-version-check aqtinstall==3.3.0
+          python3 -m aqt install-qt linux desktop ${{ env.QT_VERSION }} gcc_64 -m qtmultimedia --outputdir qt6
 
       - name: Setup Qt
         run: |
-          7z x -oqt6 linux.7z
-          echo "Qt6_DIR=$(pwd)/qt6" >> $GITHUB_ENV
-          echo "QT_PLUGIN_PATH=$(pwd)/qt6/plugins" >> $GITHUB_ENV
-          echo "QML2_IMPORT_PATH=$(pwd)/qt6/qml" >> $GITHUB_ENV
-          echo "$(pwd)/qt6/bin" >> $GITHUB_PATH
+          echo "Qt6_DIR=$(pwd)/qt6/${{ env.QT_VERSION }}/gcc_64" >> $GITHUB_ENV
+          echo "QT_PLUGIN_PATH=$(pwd)/qt6/${{ env.QT_VERSION }}/gcc_64/plugins" >> $GITHUB_ENV
+          echo "QML2_IMPORT_PATH=$(pwd)/qt6/${{ env.QT_VERSION }}/gcc_64/qml" >> $GITHUB_ENV
+          echo "$(pwd)/qt6/${{ env.QT_VERSION }}/gcc_64/bin" >> $GITHUB_PATH
           chmod -R +x qt6
 
       - name: Build client
@@ -117,6 +102,7 @@ jobs:
           echo "XPILOT_VERSION=$(cat xpilot.json | jq -r 'if .is_beta == true then "\(.version.major).\(.version.minor).\(.version.patch)-beta.\(.beta_number)" else "\(.version.major).\(.version.minor).\(.version.patch)" end')" >> $GITHUB_ENV
 
       - name: Setup InstallBuilder
+        if: ${{ env.IB_LICENSE != '' }}
         run: |
           curl -k -L ${{ env.IB_URL }} --output ib.run
           chmod +x ib.run
@@ -127,6 +113,7 @@ jobs:
           echo "PLUGIN_BUILD_DIR=${{ github.workspace }}/xPilot" >> $GITHUB_ENV
 
       - name: Create installer
+        if: ${{ env.IB_LICENSE != '' }}
         run: |
           ../ib/bin/builder build installer/linux.xml \
               --license lic.xml \
@@ -134,12 +121,14 @@ jobs:
               --setvars project.version=${{ env.XPILOT_VERSION }}
 
       - name: Rename Installer
+        if: ${{ env.IB_LICENSE != '' }}
         shell: bash
         run: |
           mv xPilot-${{ env.XPILOT_VERSION }}-linux-x64-installer.run xPilot-${{ env.XPILOT_VERSION }}-Linux.run
           chmod +x xPilot-${{ env.XPILOT_VERSION }}-Linux.run
 
       - name: Upload installer artifact
+        if: ${{ env.IB_LICENSE != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: xPilot-${{ env.XPILOT_VERSION }}-Linux.zip

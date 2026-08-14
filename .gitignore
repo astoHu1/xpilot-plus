@@ -48,3 +48,7 @@ plugin/include/Constants.h
 plugin/build/*
 /plugin/.idea
 plugin/include/constants.h
+
+# Local credentials and tool logs
+PERSONAL_ACCESS_TOKEN*
+aqtinstall.log

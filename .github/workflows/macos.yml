@@ -15,22 +15,28 @@ env:
   PLUGIN_DIR: ${{ github.workspace }}/plugin
   IB_URL: https://releases.installbuilder.com/installbuilder/installbuilder-enterprise-24.3.0-osx-installer.dmg
   IB_LICENSE: ${{ secrets.INSTALLBUILDER_LICENSE }}
-  QT_VERSION: "v6.5.2"
+  APPLE_SIGNING_CERTIFICATE: ${{ secrets.APPLE_SIGNING_CERTIFICATE }}
+  APPLE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
+  APPLE_SIGNING_CERTIFICATE_IDENTITY: ${{ secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY }}
+  NOTARIZATION_USERNAME: ${{ secrets.NOTARIZATION_USERNAME }}
+  NOTARIZATION_PASSWORD: ${{ secrets.NOTARIZATION_PASSWORD }}
+  APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+  QT_VERSION: "6.5.2"
 
 jobs:
   build:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
         with:
           submodules: true
 
       - name: Load developer certificate
-        if: ${{ env.CERTIFICATE != '' }}
+        if: ${{ env.APPLE_SIGNING_CERTIFICATE != '' }}
         env:
-          CERTIFICATE: ${{ secrets.APPLE_SIGNING_CERTIFICATE }}
-          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
+          CERTIFICATE: ${{ env.APPLE_SIGNING_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ env.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
         run: ./scripts/make_keychain.sh
 
       ### Buid Plugin ###
@@ -66,19 +72,19 @@ jobs:
         run: |
           python3 -m venv /tmp/aqt-venv
           source /tmp/aqt-venv/bin/activate
-          python -m pip install aqtinstall
-          python -m aqt install-qt mac desktop 6.5.2 clang_64 -m qtmultimedia --outputdir ${{ github.workspace }}/qt6
+          python -m pip install --disable-pip-version-check aqtinstall==3.3.0
+          python -m aqt install-qt mac desktop ${{ env.QT_VERSION }} clang_64 -m qtmultimedia --outputdir ${{ github.workspace }}/qt6
 
       - name: Setup Qt
         run: |
-          echo "Qt6_DIR=$(pwd)/qt6/6.5.2/macos" >> $GITHUB_ENV
-          echo "QT_PLUGIN_PATH=$(pwd)/qt6/6.5.2/macos/plugins" >> $GITHUB_ENV
-          echo "QML2_IMPORT_PATH=$(pwd)/qt6/6.5.2/macos/qml" >> $GITHUB_ENV
-          echo "$(pwd)/qt6/6.5.2/macos/bin" >> $GITHUB_PATH
+          echo "Qt6_DIR=$(pwd)/qt6/${{ env.QT_VERSION }}/macos" >> $GITHUB_ENV
+          echo "QT_PLUGIN_PATH=$(pwd)/qt6/${{ env.QT_VERSION }}/macos/plugins" >> $GITHUB_ENV
+          echo "QML2_IMPORT_PATH=$(pwd)/qt6/${{ env.QT_VERSION }}/macos/qml" >> $GITHUB_ENV
+          echo "$(pwd)/qt6/${{ env.QT_VERSION }}/macos/bin" >> $GITHUB_PATH
           python3 - <<'PY'
           from pathlib import Path
 
-          qt_lib = Path("qt6/6.5.2/macos/lib")
+          qt_lib = Path("qt6/${{ env.QT_VERSION }}/macos/lib")
           finder = qt_lib / "cmake/Qt6/FindWrapOpenGL.cmake"
           text = finder.read_text()
           block = '''        find_library(WrapOpenGL_AGL NAMES AGL)
@@ -167,7 +173,6 @@ jobs:
             xPilot-${{ env.XPILOT_VERSION }}-MacOS.dmg
 
       - name: Create artifacts archive
-        if: ${{ env.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
         run: |
           mkdir -p macos/plugin
           cp -R ${{ github.workspace }}/xPilot macos/plugin/
@@ -181,7 +186,6 @@ jobs:
           xcrun notarytool submit macOS.zip --apple-id "${{ secrets.NOTARIZATION_USERNAME }}" --password "${{ secrets.NOTARIZATION_PASSWORD }}" --team-id "${{ secrets.APPLE_TEAM_ID }}"
 
       - name: Upload artifacts
-        if: ${{ env.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: macOS.zip
