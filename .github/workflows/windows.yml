@@ -18,7 +18,8 @@ env:
 
 jobs:
   build:
-    runs-on: windows-latest
+    # Qt 6.5's MSVC 2019 headers are incompatible with VS 2026 on windows-latest.
+    runs-on: windows-2022
 
     steps:
       - uses: actions/checkout@v5
