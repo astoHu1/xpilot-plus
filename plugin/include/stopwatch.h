@@ -32,9 +32,9 @@ namespace xpilot
 		typedef uint64_t timestamp_t;
 		typedef uint64_t timeunit_t;
 
-		enum
+		enum : timeunit_t
 		{
-			MICROSEC = (timeunit_t)1,
+			MICROSEC = 1,
 			MILLISEC = MICROSEC * 1000,
 			SECONDS = MILLISEC * 1000,
 			MINUTES = SECONDS * 60,
