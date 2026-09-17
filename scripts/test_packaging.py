@@ -143,6 +143,14 @@ class MacBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'non-portable'):
             self.verify()
 
+    def test_relative_build_fallbacks_are_removed(self):
+        for path in (self.main, self.library):
+            bundle.run('install_name_tool', '-add_rpath', '@loader_path/../../../../lib', path)
+            bundle.run('install_name_tool', '-add_rpath', '@loader_path/missing Qt libs', path)
+        bundle.clean_rpaths(self.app)
+        bundle.sign(self.app, self.entitlements, '')
+        self.verify()
+
     def test_missing_dependency_fails(self):
         self.library.unlink()
         with self.assertRaisesRegex(ValueError, 'unresolved dependency'):

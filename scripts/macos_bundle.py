@@ -105,7 +105,17 @@ def clean_rpaths(bundle):
             rpaths, _ = commands(path, arch)
             options = []
             for rpath in dict.fromkeys(rpaths):
-                if rpath.startswith('/'):
+                # Qt builds can also leave @loader_path/../../lib fallbacks
+                # that escape the deployed bundle, or nonexistent directories.
+                # They are not useful deployment paths and can load host code.
+                portable = False
+                if not rpath.startswith('/'):
+                    try:
+                        resolved = expand_path(rpath, path, main).resolve(strict=True)
+                        portable = resolved.is_dir() and resolved.is_relative_to(bundle)
+                    except (ValueError, OSError):
+                        pass
+                if not portable:
                     options.extend(('-delete_rpath', rpath))
             if path == main and '@executable_path/../Frameworks' not in rpaths:
                 options.extend(('-add_rpath', '@executable_path/../Frameworks'))
