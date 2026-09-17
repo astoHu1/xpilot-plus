@@ -56,7 +56,8 @@ effects limiting, arbitrary callback lengths, missing sources and concurrent
 shutdown. Device and Client lifecycle tests use fake devices; UDP concurrency
 tests use localhost only. Tests never authenticate to VATSIM or launch xPilot
 or X-Plane. Native public API compatibility is also checked by compiling the
-full client against the updated native implementation.
+full client against the updated native implementation. After stripping comments
+and whitespace, `Client.h` matches the previous revision exactly.
 
 The wrapper suite compiles actual wrapper/config code with audio, simulator
 and network doubles and loads invisible QML. Its filesystem is disposable.
@@ -83,5 +84,7 @@ The public auth library remains a nonfunctional development stub. Release
 jobs now fail unless the approved private library and release credentials are
 configured; no credentials or private authentication implementation are added.
 The AFV submodule remains pinned to an exact commit in the existing fork.
-Local Homebrew Qt deployment exposes missing split-module runtime paths, which
-the new static verifier rejects; CI uses the complete pinned Qt 6.5.2 package.
+Local Homebrew Qt deployment needs its shared library directory supplied to
+macdeployqt (`-libpath=/opt/homebrew/lib`). With that path supplied, the built
+arm64 application passes static verification of all 129 Mach-O files. CI uses
+the complete pinned Qt 6.5.2 package.
