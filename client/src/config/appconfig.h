@@ -75,14 +75,14 @@ namespace xpilot
         QString NotificationAudioDevice;
         bool Com1OnHeadset = true;
         bool Com2OnHeadset = true;
-        bool SplitAudioChannels;
+        bool SplitAudioChannels = false;
         int Com1Volume = 50;
         int Com2Volume = 50;
-        bool AutoOutputVolumeBalance;
-        int AutoOutputVolumeBalanceStrength;
+        bool AutoOutputVolumeBalance = false;
+        int AutoOutputVolumeBalanceStrength = 60;
         int MicrophoneVolume = 0;
-        bool AudioEffectsDisabled;
-        bool HFSquelchEnabled;
+        bool AudioEffectsDisabled = false;
+        bool HFSquelchEnabled = false;
         bool AutoModeC;
         bool AlertPrivateMessage;
         bool AlertDirectRadioMessage;
@@ -96,7 +96,7 @@ namespace xpilot
         bool SilenceModelInstall;
         QStringList VisualMachines;
         bool KeepWindowVisible;
-        bool AircraftRadioStackControlsVolume;
+        bool AircraftRadioStackControlsVolume = false;
         bool MicrophoneCalibrated;
 
         QString NameWithHomeAirport() const
@@ -174,11 +174,11 @@ namespace xpilot
         void setInputDevice(const QString &value) { tempInputDevice = value; }
         void setNotificationAudioDevice(const QString &value) { tempNotificationAudioDevice = value; }
         void setSplitAudioChannels(bool value) { tempSplitAudioChannels = value; }
-        void setCom1Volume(int value) { tempCom1Volume = value; }
-        void setCom2Volume(int value) { tempCom2Volume = value; }
+        void setCom1Volume(int value) { tempCom1Volume = qBound(0, value, 100); }
+        void setCom2Volume(int value) { tempCom2Volume = qBound(0, value, 100); }
         void setAutoOutputVolumeBalance(bool value) { tempAutoOutputVolumeBalance = value; }
-        void setAutoOutputVolumeBalanceStrength(int value) { tempAutoOutputVolumeBalanceStrength = value; }
-        void setMicrophoneVolume(int value) { tempMicrophoneVolume = value; }
+        void setAutoOutputVolumeBalanceStrength(int value) { tempAutoOutputVolumeBalanceStrength = qBound(0, value, 100); }
+        void setMicrophoneVolume(int value) { tempMicrophoneVolume = qBound(-60, value, 18); }
         void setAudioEffectsDisabled(bool value) { tempAudioEffectsDisabled = value; }
         void setHFSquelchEnabled(bool value) { tempHFSquelchEnabled = value; }
         void setAutoModeC(bool value) { tempAutoModeC = value; }
@@ -269,14 +269,14 @@ namespace xpilot
         QString tempHeadsetDevice;
         QString tempInputDevice;
         QString tempNotificationAudioDevice;
-        bool tempSplitAudioChannels;
-        int tempCom1Volume;
-        int tempCom2Volume;
-        bool tempAutoOutputVolumeBalance;
-        int tempAutoOutputVolumeBalanceStrength;
-        int tempMicrophoneVolume;
-        bool tempAudioEffectsDisabled;
-        bool tempHFSquelchEnabled;
+        bool tempSplitAudioChannels = false;
+        int tempCom1Volume = 50;
+        int tempCom2Volume = 50;
+        bool tempAutoOutputVolumeBalance = false;
+        int tempAutoOutputVolumeBalanceStrength = 60;
+        int tempMicrophoneVolume = 0;
+        bool tempAudioEffectsDisabled = false;
+        bool tempHFSquelchEnabled = false;
         bool tempAutoModeC;
         bool tempAlertPrivateMessage;
         bool tempAlertDirectRadioMessage;
@@ -285,7 +285,7 @@ namespace xpilot
         bool tempAlertSelcal;
         bool tempAlertDisconnect;
         bool tempKeepWindowVisible;
-        bool tempAircraftRadioStackControlsVolume;
+        bool tempAircraftRadioStackControlsVolume = false;
 
         template <typename T>
         T getJsonValue(const QVariantMap &map, const QString &key, const T &defaultValue) {

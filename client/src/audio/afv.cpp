@@ -17,6 +17,8 @@
 */
 
 #include "afv.h"
+
+#include <cmath>
 #include "config/appconfig.h"
 #include "common/utils.h"
 #include "common/build_config.h"
@@ -57,18 +59,18 @@ namespace xpilot
             afvLogPath.mkpath(".");
         }
 
-        // keep only the last 10 log files
-        QFileInfoList files = afvLogPath.entryInfoList(QDir::Files | QDir::NoDotAndDotDot, QDir::Time);
-        const int MAX_LOGS_TO_RETAIN = 10;
-        for(int index = files.size(); index >= MAX_LOGS_TO_RETAIN; --index) {
-            const QFileInfo &info = files.at(index - 1);
-            QFile::remove(info.absoluteFilePath());
-        }
-
         m_afvLog.setFileName(pathAppend(afvLogPath.path(), QString("AfvLog-%1.txt").arg(QDateTime::currentDateTimeUtc().toString("yyyyMMdd-hhmmss"))));
         if(m_afvLog.open(QFile::WriteOnly))
         {
             m_logDataStream.setDevice(&m_afvLog);
+        }
+
+        // keep only the last 10 log files
+        QFileInfoList files = afvLogPath.entryInfoList(QDir::Files | QDir::NoDotAndDotDot, QDir::Time);
+        const int MAX_LOGS_TO_RETAIN = 10;
+        for(int index = files.size(); index > MAX_LOGS_TO_RETAIN; --index) {
+            const QFileInfo &info = files.at(index - 1);
+            QFile::remove(info.absoluteFilePath());
         }
 
         m_transceiverTimer.setInterval(5000);
@@ -76,6 +78,11 @@ namespace xpilot
         m_vuTimer.setInterval(10);
         m_vuTimer.start();
         m_audioDevicesTimer.setInterval(500);
+        m_configSaveTimer.setSingleShot(true);
+        m_configSaveTimer.setInterval(250);
+        connect(&m_configSaveTimer, &QTimer::timeout, this, [] {
+            AppConfig::getInstance()->saveConfig();
+        });
 
 #ifdef Q_OS_WIN
         WORD wVersionRequested;
@@ -84,14 +91,17 @@ namespace xpilot
         WSAStartup(wVersionRequested, &wsaData);
 #endif
 
-        afv_native::setLogger(gLogger, this);
-
         QString clientName = QString("xPilot %1").arg(BuildConfig::getVersionString());
 
-        ev_base = event_base_new();
-        m_client = std::make_shared<afv_native::Client>(ev_base, 2, clientName.toStdString().c_str());
-        m_client->ClientEventCallback.addCallback(nullptr, [&](afv_native::ClientEventType evt, void* data, void* data2)
+        m_eventBase.reset(event_base_new());
+        if(!m_eventBase) {
+            qFatal("Could not allocate the AFV event base.");
+        }
+        m_client = std::make_shared<afv_native::Client>(m_eventBase.get(), 2, clientName.toStdString());
+        afv_native::setLogger(gLogger, this);
+        m_client->ClientEventCallback.addCallback(this, [this](afv_native::ClientEventType evt, void* data, void*)
         {
+            if(m_shuttingDown.load()) return;
             switch(evt)
             {
                 case afv_native::ClientEventType::APIServerError:
@@ -116,7 +126,7 @@ namespace xpilot
                 case afv_native::ClientEventType::VoiceServerChannelError:
                     if(data != nullptr) {
                         int error = *reinterpret_cast<int*>(data);
-                        emit notificationPosted(QString("Voice server error: %s").arg(error), MessageType::Error);
+                        emit notificationPosted(QString("Voice server error: %1").arg(error), MessageType::Error);
                     }
                     break;
                 case afv_native::ClientEventType::VoiceServerError:
@@ -139,8 +149,13 @@ namespace xpilot
                     break;
                 case afv_native::ClientEventType::StationAliasesUpdated:
                     {
-                        auto stations = m_client->getStationAliases();
-                        m_aliasedStations = QVector<afv_native::afv::dto::Station>(stations.begin(), stations.end());
+                        const auto stations = m_client->getStationAliases();
+                        const QVector<afv_native::afv::dto::Station> aliases(stations.begin(), stations.end());
+                        QMetaObject::invokeMethod(this, [this, aliases] {
+                            if(!m_shuttingDown.load()) {
+                                m_aliasedStations = aliases;
+                            }
+                        }, Qt::QueuedConnection);
                     }
                     break;
                 case afv_native::ClientEventType::VoiceServerConnected:
@@ -151,9 +166,9 @@ namespace xpilot
                     break;
                 case afv_native::ClientEventType::AudioError:
                     if(data != nullptr) {
-                        const char* error = reinterpret_cast<const char*>(data);
+                        const QString error = QString::fromUtf8(static_cast<const char*>(data));
                         QMetaObject::invokeMethod(this, [this, error]() {
-                            emit notificationPosted(error, MessageType::Error);
+                            if(!m_shuttingDown.load()) emit notificationPosted(error, MessageType::Error);
                         }, Qt::QueuedConnection);
                     }
                     break;
@@ -175,16 +190,19 @@ namespace xpilot
         connect(&m_audioDevicesTimer, &QTimer::timeout, this, &AudioForVatsim::OnAudioDevicesTimer);
         connect(&m_transceiverTimer, &QTimer::timeout, this, &AudioForVatsim::OnTransceiverTimer);
         connect(&m_rxTxQueryTimer, &QTimer::timeout, this, [&]{
-            bool com1Rx = m_radioStackState.Com1ReceiveEnabled && m_client->getRxActive(0);
-            bool com2Rx = m_radioStackState.Com2ReceiveEnabled && m_client->getRxActive(1);
+            std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+            const bool powered = m_radioStackState.AvionicsPowerOn || m_radioStackState.OverrideRadioPower;
+            const bool com1Rx = powered && m_radioStackState.Com1ReceiveEnabled && m_client->getRxActive(0);
+            const bool com2Rx = powered && m_radioStackState.Com2ReceiveEnabled && m_client->getRxActive(1);
 
             emit radioRxChanged(0, com1Rx);
             emit radioRxChanged(1, com2Rx);
 
-            m_xplaneAdapter.setComRxDataref(0, m_client->getRxActive(0));
-            m_xplaneAdapter.setComRxDataref(1, m_client->getRxActive(1));
+            m_xplaneAdapter.setComRxDataref(0, com1Rx);
+            m_xplaneAdapter.setComRxDataref(1, com2Rx);
         });
         connect(&m_vuTimer, &QTimer::timeout, this, [=]{
+            std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
             double vu = m_client->getInputPeak();
             emit inputVuChanged(vu);
             m_xplaneAdapter.setVuDataref(vu);
@@ -202,6 +220,7 @@ namespace xpilot
             }
         });
         connect(&m_xplaneAdapter, &XplaneAdapter::radioStackStateChanged, this, [&](RadioStackState state){
+            std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
             if(state != m_radioStackState) {
                 m_radioStackState = state;
 
@@ -226,6 +245,7 @@ namespace xpilot
             }
         });
         connect(&m_xplaneAdapter, &XplaneAdapter::pttPressed, this, [&]{
+            std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
             if(m_voiceTransmitDisabled) {
                 m_client->setPtt(false);
             }
@@ -234,6 +254,7 @@ namespace xpilot
             }
         });
         connect(&m_xplaneAdapter, &XplaneAdapter::pttReleased, this, [&]{
+            std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
             m_client->setPtt(false);
         });
         connect(&m_xplaneAdapter, &XplaneAdapter::com1OnHeadsetChanged, this, [&](bool onHeadset) {
@@ -278,27 +299,38 @@ namespace xpilot
             m_xplaneAdapter.NotificationPosted(message, toColorHex(type));
         });
 
-        m_keepAlive = true;
-        m_workerThread = QThread::create([&]{
-            while(m_keepAlive)
+        m_workerThread.reset(QThread::create([this] {
+            while(!QThread::currentThread()->isInterruptionRequested())
             {
-                event_base_loop(ev_base, EVLOOP_NONBLOCK);
-#ifdef Q_OS_WIN
-                Sleep(10);
-#else
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-#endif
+                {
+                    std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+                    event_base_loop(m_eventBase.get(), EVLOOP_NONBLOCK);
+                }
+                QThread::msleep(10);
             }
-        });
+        }));
         m_workerThread->start();
     }
 
     AudioForVatsim::~AudioForVatsim()
     {
-        m_keepAlive = false;
-        m_workerThread->terminate();
-        m_workerThread->deleteLater();
+        m_shuttingDown.store(true);
+        m_transceiverTimer.stop();
+        m_rxTxQueryTimer.stop();
+        m_vuTimer.stop();
+        m_audioDevicesTimer.stop();
+        flushConfigSave();
+        // Finish libevent callbacks before releasing any of their owners.
+        m_workerThread->requestInterruption();
+        m_workerThread->wait();
+        m_workerThread.reset();
+        m_client->stopAudio();
+        m_client->ClientEventCallback.removeCallback(this);
+        m_client->disconnect();
         m_client.reset();
+        // setLogger must synchronize with in-flight native logger callbacks.
+        afv_native::setLogger(nullptr, nullptr);
+        m_eventBase.reset();
 #ifdef Q_OS_WIN
         WSACleanup();
 #endif
@@ -306,91 +338,151 @@ namespace xpilot
 
     void AudioForVatsim::afvLogger(QString message)
     {
-        m_logDataStream << message;
-        m_logDataStream.flush();
+        if(m_shuttingDown.load()) return;
+        // QFile/QTextStream belong to the QObject thread. Copy the message before
+        // returning to the native logger; queued calls are discarded on destruction.
+        QMetaObject::invokeMethod(this, [this, message] {
+            if(!m_shuttingDown.load() && m_afvLog.isOpen()) {
+                m_logDataStream << message;
+                m_logDataStream.flush();
+            }
+        }, Qt::QueuedConnection);
+    }
+
+    void AudioForVatsim::scheduleConfigSave()
+    {
+        if(!m_settingsOpen) m_configSaveTimer.start();
+    }
+
+    void AudioForVatsim::flushConfigSave()
+    {
+        if(m_configSaveTimer.isActive()) {
+            m_configSaveTimer.stop();
+            AppConfig::getInstance()->saveConfig();
+        }
     }
 
     void AudioForVatsim::setInputDevice(QString deviceName)
     {
-        if(!deviceName.isEmpty()) {
-            m_client->setMicrophoneDevice(deviceName.toStdString().c_str());
-            m_client->startMicrophone();
-        }
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+        if(deviceName.isEmpty() || (deviceName == m_inputDevice && m_client->getMicrophoneDevice())) return;
+        const auto device = std::find_if(m_inputDevices.cbegin(), m_inputDevices.cend(),
+                                        [&](const AudioDeviceInfo &entry) { return entry.DeviceName == deviceName; });
+        if(device == m_inputDevices.cend()) return;
+        m_client->setMicrophoneDevice(deviceName.toStdString());
+        m_client->startMicrophone();
+        m_inputDevice = deviceName;
     }
 
     void AudioForVatsim::setSpeakerDevice(QString deviceName)
     {
-        if(!deviceName.isEmpty()) {
-            m_client->setSpeakerDevice(deviceName.toStdString().c_str());
-            m_client->startSpeaker();
-        }
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+        if(deviceName.isEmpty() || (deviceName == m_speakerDevice && m_client->getSpeakerDevice())) return;
+        const auto device = std::find_if(m_outputDevices.cbegin(), m_outputDevices.cend(),
+                                        [&](const AudioDeviceInfo &entry) { return entry.DeviceName == deviceName; });
+        if(device == m_outputDevices.cend()) return;
+        m_client->setSpeakerDevice(deviceName.toStdString());
+        m_client->startSpeaker();
+        m_speakerDevice = deviceName;
     }
 
     void AudioForVatsim::setHeadsetDevice(QString deviceName)
     {
-        if(!deviceName.isEmpty()) {
-            m_client->setHeadsetDevice(deviceName.toStdString().c_str());
-            m_client->startHeadset();
-        }
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+        if(deviceName.isEmpty() || (deviceName == m_headsetDevice && m_client->getHeadsetDevice())) return;
+        const auto device = std::find_if(m_outputDevices.cbegin(), m_outputDevices.cend(),
+                                        [&](const AudioDeviceInfo &entry) { return entry.DeviceName == deviceName; });
+        if(device == m_outputDevices.cend()) return;
+        m_client->setHeadsetDevice(deviceName.toStdString());
+        m_client->startHeadset();
+        m_headsetDevice = deviceName;
     }
 
     void AudioForVatsim::setCom1Volume(double volume)
     {
-        double v = volume;
-        if(v < 0) v = 0;
-        if(v > 100) v = 100;
-
-        m_com1BaseVolume = v;
+        if(!std::isfinite(volume)) return;
+        const int value = qRound(qBound(0.0, volume, 100.0));
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+        m_com1BaseVolume = value;
         updateRadioGain(0);
-
-        AppConfig::getInstance()->Com1Volume = v;
-        AppConfig::getInstance()->saveConfig();
+        auto *config = AppConfig::getInstance();
+        if(!m_settingsOpen && config->Com1Volume != value) {
+            config->Com1Volume = value;
+            config->setCom1Volume(value);
+            scheduleConfigSave();
+        }
     }
 
     void AudioForVatsim::setCom2Volume(double volume)
     {
-        double v = volume;
-        if(v < 0) v = 0;
-        if(v > 100) v = 100;
-
-        m_com2BaseVolume = v;
+        if(!std::isfinite(volume)) return;
+        const int value = qRound(qBound(0.0, volume, 100.0));
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+        m_com2BaseVolume = value;
         updateRadioGain(1);
-
-        AppConfig::getInstance()->Com2Volume = v;
-        AppConfig::getInstance()->saveConfig();
+        auto *config = AppConfig::getInstance();
+        if(!m_settingsOpen && config->Com2Volume != value) {
+            config->Com2Volume = value;
+            config->setCom2Volume(value);
+            scheduleConfigSave();
+        }
     }
 
     void AudioForVatsim::setAutoOutputVolumeBalance(bool enabled)
     {
-        AppConfig::getInstance()->AutoOutputVolumeBalance = enabled;
-        m_client->setAutoOutputGain(enabled);
-        AppConfig::getInstance()->saveConfig();
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+        const auto value = enabled;
+        m_client->setAutoOutputGain(value);
+        auto *config = AppConfig::getInstance();
+        if(!m_settingsOpen && config->AutoOutputVolumeBalance != value) {
+            config->AutoOutputVolumeBalance = value;
+            config->setAutoOutputVolumeBalance(value);
+            scheduleConfigSave();
+        }
     }
 
     void AudioForVatsim::setAutoOutputVolumeBalanceStrength(int strength)
     {
-        int clamped = qBound(0, strength, 100);
-        AppConfig::getInstance()->AutoOutputVolumeBalanceStrength = clamped;
-        m_client->setAutoOutputGainStrength(clamped / 100.0f);
-        AppConfig::getInstance()->saveConfig();
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+        const auto value = qBound(0, strength, 100);
+        m_client->setAutoOutputGainStrength(value / 100.0f);
+        auto *config = AppConfig::getInstance();
+        if(!m_settingsOpen && config->AutoOutputVolumeBalanceStrength != value) {
+            config->AutoOutputVolumeBalanceStrength = value;
+            config->setAutoOutputVolumeBalanceStrength(value);
+            scheduleConfigSave();
+        }
     }
 
     void AudioForVatsim::disableAudioEffects(bool disabled)
     {
-        m_client->setEnableOutputEffects(!disabled);
-        AppConfig::getInstance()->AudioEffectsDisabled = disabled;
-        AppConfig::getInstance()->saveConfig();
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+        const auto value = disabled;
+        m_client->setEnableOutputEffects(!value);
+        auto *config = AppConfig::getInstance();
+        if(!m_settingsOpen && config->AudioEffectsDisabled != value) {
+            config->AudioEffectsDisabled = value;
+            config->setAudioEffectsDisabled(value);
+            scheduleConfigSave();
+        }
     }
 
     void AudioForVatsim::enableHfSquelch(bool enabled)
     {
-        m_client->setEnableHfSquelch(enabled);
-        AppConfig::getInstance()->HFSquelchEnabled = enabled;
-        AppConfig::getInstance()->saveConfig();
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+        const auto value = enabled;
+        m_client->setEnableHfSquelch(value);
+        auto *config = AppConfig::getInstance();
+        if(!m_settingsOpen && config->HFSquelchEnabled != value) {
+            config->HFSquelchEnabled = value;
+            config->setHFSquelchEnabled(value);
+            scheduleConfigSave();
+        }
     }
 
     void AudioForVatsim::OnNetworkConnected(QString callsign, bool enableVoice)
     {
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
         if(!enableVoice)
             return;
 
@@ -404,8 +496,11 @@ namespace xpilot
 
     void AudioForVatsim::OnNetworkDisconnected()
     {
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
         emit radioRxChanged(0, false);
         emit radioRxChanged(1, false);
+        m_xplaneAdapter.setComRxDataref(0, false);
+        m_xplaneAdapter.setComRxDataref(1, false);
 
         m_client->disconnect();
         m_transceiverTimer.stop();
@@ -459,6 +554,7 @@ namespace xpilot
 
     void AudioForVatsim::configureAudioDevices()
     {
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
         m_client->stopAudio();
 
         m_outputDevices.clear();
@@ -486,30 +582,26 @@ namespace xpilot
 
         emit inputDevicesChanged();
 
-        if(!AppConfig::getInstance()->InputDevice.isEmpty())
-        {
-            m_client->setMicrophoneDevice(AppConfig::getInstance()->InputDevice.toStdString());
-        }
+        // Empty committed names must also replace any temporary device preview.
+        m_client->setMicrophoneDevice(AppConfig::getInstance()->InputDevice.toStdString());
+        m_client->setSpeakerDevice(AppConfig::getInstance()->SpeakerDevice.toStdString());
+        m_client->setHeadsetDevice(AppConfig::getInstance()->HeadsetDevice.toStdString());
 
-        if(!AppConfig::getInstance()->SpeakerDevice.isEmpty())
-        {
-            m_client->setSpeakerDevice(AppConfig::getInstance()->SpeakerDevice.toStdString());
-        }
-
-        if(!AppConfig::getInstance()->HeadsetDevice.isEmpty())
-        {
-            m_client->setHeadsetDevice(AppConfig::getInstance()->HeadsetDevice.toStdString());
-        }
-
-        setSplitAudioChannels(AppConfig::getInstance()->SplitAudioChannels);
+        m_splitAudioChannels = AppConfig::getInstance()->SplitAudioChannels;
+        m_client->setSplitAudioChannels(m_splitAudioChannels);
+        m_xplaneAdapter.setSplitAudioChannels(m_splitAudioChannels);
         setOnHeadset(0, AppConfig::getInstance()->Com1OnHeadset);
         setOnHeadset(1, AppConfig::getInstance()->Com2OnHeadset);
 
         m_client->startAudio();
+        m_inputDevice = AppConfig::getInstance()->InputDevice;
+        m_headsetDevice = AppConfig::getInstance()->HeadsetDevice;
+        m_speakerDevice = AppConfig::getInstance()->SpeakerDevice;
     }
 
     void AudioForVatsim::updateTransceivers()
     {
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
         quint32 com1Alias = getAliasFrequency(m_radioStackState.Com1Frequency * 1000);
         quint32 com2Alias = getAliasFrequency(m_radioStackState.Com2Frequency * 1000);
 
@@ -538,11 +630,15 @@ namespace xpilot
 
     void AudioForVatsim::setMicrophoneVolume(int volume)
     {
-        m_client->setMicrophoneVolume(volume);
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+        m_client->setMicrophoneVolume(qBound(-60, volume, 18));
     }
 
     void AudioForVatsim::setOnHeadset(unsigned int radio, bool onHeadset)
     {
+        if(radio >= 2) return;
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+        const bool changed = (radio == 0 ? AppConfig::getInstance()->Com1OnHeadset : AppConfig::getInstance()->Com2OnHeadset) != onHeadset;
         m_client->setOnHeadset(radio, onHeadset);
 
         if(radio == 0) {
@@ -554,20 +650,25 @@ namespace xpilot
             m_xplaneAdapter.setCom2OnHeadset(onHeadset);
         }
 
-        AppConfig::getInstance()->saveConfig();
+        if(changed) scheduleConfigSave();
     }
 
     void AudioForVatsim::setSplitAudioChannels(bool split)
     {
-        m_client->stopAudio();
-        m_client->setSplitAudioChannels(split);
-        m_client->startAudio();
-
-        AppConfig::getInstance()->SplitAudioChannels = split;
-
+        std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+        if(m_splitAudioChannels != split) {
+            m_client->stopAudio();
+            m_client->setSplitAudioChannels(split);
+            m_client->startAudio();
+            m_splitAudioChannels = split;
+        }
+        auto *config = AppConfig::getInstance();
+        if(!m_settingsOpen && config->SplitAudioChannels != split) {
+            config->SplitAudioChannels = split;
+            config->setSplitAudioChannels(split);
+            scheduleConfigSave();
+        }
         m_xplaneAdapter.setSplitAudioChannels(split);
-
-        AppConfig::getInstance()->saveConfig();
     }
 
     void AudioForVatsim::updateRadioGain(unsigned int radio)
@@ -583,12 +684,43 @@ namespace xpilot
 
     void AudioForVatsim::settingsWindowOpened()
     {
+        if(m_settingsOpen) return;
+        flushConfigSave();
+        AppConfig::getInstance()->setInitialTempValues();
+        m_settingsOpen = true;
+        OnAudioDevicesTimer();
+        // Disconnect and device failures release the native device. Calibration
+        // needs a live microphone even if the selected name has not changed.
+        {
+            std::lock_guard<std::recursive_mutex> lock(m_clientMutex);
+            if(!m_client->getMicrophoneDevice()) {
+                setInputDevice(AppConfig::getInstance()->InputDevice);
+            }
+        }
         m_audioDevicesTimer.start();
     }
 
     void AudioForVatsim::settingsWindowClosed()
     {
+        if(!m_settingsOpen) return;
         m_audioDevicesTimer.stop();
+        // QML previews are temporary. Apply/OK copy the staged values into the
+        // committed config; Cancel leaves it unchanged. Restore that baseline.
+        auto *config = AppConfig::getInstance();
+        if(m_inputDevice != config->InputDevice || m_headsetDevice != config->HeadsetDevice ||
+           m_speakerDevice != config->SpeakerDevice || m_splitAudioChannels != config->SplitAudioChannels) {
+            configureAudioDevices();
+        }
+        setCom1Volume(config->Com1Volume);
+        setCom2Volume(config->Com2Volume);
+        setMicrophoneVolume(config->MicrophoneVolume);
+        disableAudioEffects(config->AudioEffectsDisabled);
+        enableHfSquelch(config->HFSquelchEnabled);
+        setAutoOutputVolumeBalance(config->AutoOutputVolumeBalance);
+        setAutoOutputVolumeBalanceStrength(config->AutoOutputVolumeBalanceStrength);
+        config->setInitialTempValues();
+        m_settingsOpen = false;
+        flushConfigSave();
     }
 
     bool AudioForVatsim::fuzzyMatchCallsign(const QString &callsign, const QString &compareTo) const

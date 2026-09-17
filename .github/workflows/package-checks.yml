@@ -1,0 +1,37 @@
+name: Packaging checks
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-packaging:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Offline packaging regression tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python -m unittest discover -s scripts -p "test_*.py" -v
+      - name: Check shell and installer syntax
+        shell: bash
+        run: |
+          for script in scripts/*.sh; do bash -n "$script"; done
+          python -c 'from pathlib import Path; import xml.etree.ElementTree as E; [E.parse(p) for p in Path("installer").glob("*.xml")]'
+      - name: Validate Actions workflows
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          curl --fail --show-error --location https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz -o "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck=

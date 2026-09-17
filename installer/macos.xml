@@ -6,7 +6,7 @@
     <compressionAlgorithm>lzma-ultra</compressionAlgorithm>
     <createOsxBundleDmg>1</createOsxBundleDmg>
     <disableSplashScreen>1</disableSplashScreen>
-    <enableRollback>0</enableRollback>
+    <enableRollback>1</enableRollback>
     <enableTimestamp>1</enableTimestamp>
     <productDisplayName>xPilot</productDisplayName>
     <saveRelativePaths>1</saveRelativePaths>
@@ -15,7 +15,7 @@
     <osxApplicationBundleIcon>../client/icon.icns</osxApplicationBundleIcon>  
     <osxApplicationBundleIdentifier>org.vatsim.xpilot</osxApplicationBundleIdentifier>
     <osxSigningIdentity>${apple_signing_identity}</osxSigningIdentity>
-    <osxSigningKeychainFile>/Users/runner/Library/Keychains/Signing keychain-db</osxSigningKeychainFile>
+    <osxSigningKeychainFile>${env(SIGNING_KEYCHAIN)}</osxSigningKeychainFile>
     <installerFilename>xPilot.${platform_exec_suffix}</installerFilename>
     <enableDebugger>1</enableDebugger>
     <functionDefinitionList>
@@ -146,13 +146,6 @@
                 <compareText logic="does_not_equal" text="${env(PLUGIN_BUILD_DIR)}" value=""/>
             </ruleList>
         </setInstallerVariable>
-        <runProgram>
-            <program>security</program>
-            <programArguments>unlock-keychain -p '${password}' "${project.osxSigningKeychainFile}"</programArguments>
-            <ruleList>
-                <platformTest type="osx"/>
-            </ruleList>
-        </runProgram>
     </preBuildActionList>
     <preInstallationActionList>
         <IsXpilotRunning/>
@@ -246,14 +239,11 @@
                 <fileTest condition="exists" path="${installdir}"/>
             </ruleList>
         </actionGroup>
-        <!-- Remove runtime directories from an older installation before the new bundle is copied. -->
-        <deleteFile path="${installdir}/xPilot.app/Contents/Frameworks" />
-        <deleteFile path="${installdir}/xPilot.app/Contents/Plugins" />
-        <deleteFile path="${installdir}/xPilot.app/Contents/Resources/qml" />
-        <deleteFile path="${installdir}/xPilot.app/Contents/Resources/qt.conf" />
     </preInstallationActionList>
     <postInstallationActionList>
-        <!-- delete old client files -->
+        <!-- Clean obsolete files only after the new bundle has been installed.
+             Frameworks, PlugIns, qml and qt.conf belong to the new shared-Qt
+             bundle too: deleting those directories here would break it. -->
         <deleteFile path="${installdir}/.sentry-native" />
         <deleteFile path="${installdir}/xPilot.app/Contents/MacOS/crashpad_handler" />
         <deleteFile path="${installdir}/xPilot.app/Contents/Resources/xpilot.icns" />

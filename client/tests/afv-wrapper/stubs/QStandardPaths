@@ -1,0 +1,12 @@
+#pragma once
+#include <QtCore/qstandardpaths.h>
+#include <QString>
+// macOS may ignore HOME for native standard paths. Keep config/log I/O inside
+// the launcher's temporary directory on every platform, before creating config.
+class OfflineStandardPaths : public QStandardPaths {
+public:
+    static QString writableLocation(StandardLocation) {
+        return qEnvironmentVariable("AFV_TEST_HOME");
+    }
+};
+#define QStandardPaths OfflineStandardPaths

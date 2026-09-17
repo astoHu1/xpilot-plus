@@ -6,26 +6,50 @@ import org.vatsim.xpilot
 import "../../Controls"
 
 Item {
+    id: root
 
     signal applyChanges()
 
     property bool inputDeviceListLoaded: false
     property bool outputDeviceListLoaded: false
     property bool inputDeviceChanged: false
+    property bool refreshingDevices: false
+    property bool initializing: true
+
+    function refreshInputDevices() {
+        refreshingDevices = true
+        inputDeviceList.model = audio.InputDevices
+        inputDeviceList.currentIndex = inputDeviceList.indexOfValue(inputDeviceList.selectedDevice)
+        inputDeviceListLoaded = true
+        refreshingDevices = false
+    }
+
+    function refreshOutputDevices() {
+        refreshingDevices = true
+        headsetDeviceList.model = audio.OutputDevices
+        speakerDeviceList.model = audio.OutputDevices
+        headsetDeviceList.currentIndex = headsetDeviceList.indexOfValue(headsetDeviceList.selectedDevice)
+        speakerDeviceList.currentIndex = speakerDeviceList.indexOfValue(speakerDeviceList.selectedDevice)
+        outputDeviceListLoaded = true
+        refreshingDevices = false
+    }
+
+    function roundedVolume(value, minimum, maximum) {
+        return Math.round(Math.max(minimum, Math.min(maximum, value)))
+    }
 
     Connections {
         target: audio
 
         function onInputDevicesChanged() {
             if(inputDeviceListLoaded) {
-                inputDeviceList.model = audio.InputDevices
+                refreshInputDevices()
             }
         }
 
         function onOutputDevicesChanged() {
             if(outputDeviceListLoaded) {
-                speakerDeviceList.model = audio.OutputDevices
-                headsetDeviceList.model = audio.OutputDevices
+                refreshOutputDevices()
             }
         }
 
@@ -39,13 +63,21 @@ Item {
 
         function onSplitAudioChannelsChanged(split) {
             switchSplitComChannels.checked = split
+            if(!root.initializing) {
+                AppConfig.SplitAudioChannels = split
+                applyChanges()
+            }
         }
     }
 
     Component.onCompleted: {
-        inputDeviceList.model = audio.InputDevices
-        headsetDeviceList.model = audio.OutputDevices
-        speakerDeviceList.model = audio.OutputDevices
+        // Start staging before any controls can emit change signals.
+        audio.settingsWindowOpened()
+        inputDeviceList.selectedDevice = AppConfig.InputDevice
+        headsetDeviceList.selectedDevice = AppConfig.HeadsetDevice
+        speakerDeviceList.selectedDevice = AppConfig.SpeakerDevice
+        refreshInputDevices()
+        refreshOutputDevices()
         switchSplitComChannels.checked = AppConfig.SplitAudioChannels
         switchEnableHfSquelch.checked = AppConfig.HFSquelchEnabled
         switchDisableRadioEffects.checked = AppConfig.AudioEffectsDisabled
@@ -55,6 +87,7 @@ Item {
         com2Slider.volume = AppConfig.Com2Volume
         autoOutputBalanceStrength.volume = AppConfig.AutoOutputVolumeBalanceStrength
         microphoneVolume.volume = AppConfig.MicrophoneVolume
+        initializing = false
     }
 
     ColumnLayout {
@@ -63,15 +96,15 @@ Item {
 
         CustomComboBox {
             id: inputDeviceList
+            property string selectedDevice: ""
             fieldLabel: "Microphone Device:"
             valueRole: "name"
             textRole: "name"
-            onModelChanged: {
-                currentIndex = indexOfValue(AppConfig.InputDevice)
-                inputDeviceListLoaded = true
-            }
             onSelectedValueChanged: function(value) {
-                if(inputDeviceListLoaded) {
+                if(!root.initializing && !refreshingDevices && inputDeviceListLoaded &&
+                   inputDeviceList.currentIndex >= 0 && value.length > 0 &&
+                   value !== inputDeviceList.selectedDevice) {
+                    inputDeviceList.selectedDevice = value
                     AppConfig.InputDevice = value
                     audio.setInputDevice(value)
                     inputDeviceChanged = true
@@ -82,15 +115,15 @@ Item {
 
         CustomComboBox {
             id: headsetDeviceList
+            property string selectedDevice: ""
             fieldLabel: "Headset Device:"
             valueRole: "name"
             textRole: "name"
-            onModelChanged: {
-                currentIndex = indexOfValue(AppConfig.HeadsetDevice)
-                outputDeviceListLoaded = true
-            }
             onSelectedValueChanged: function(value) {
-                if(outputDeviceListLoaded) {
+                if(!root.initializing && !refreshingDevices && outputDeviceListLoaded &&
+                   headsetDeviceList.currentIndex >= 0 && value.length > 0 &&
+                   value !== headsetDeviceList.selectedDevice) {
+                    headsetDeviceList.selectedDevice = value
                     AppConfig.HeadsetDevice = value
                     audio.setHeadsetDevice(value)
                     applyChanges()
@@ -100,15 +133,15 @@ Item {
 
         CustomComboBox {
             id: speakerDeviceList
+            property string selectedDevice: ""
             fieldLabel: "Speaker Device:"
             valueRole: "name"
             textRole: "name"
-            onModelChanged: {
-                currentIndex = indexOfValue(AppConfig.SpeakerDevice)
-                outputDeviceListLoaded = true
-            }
             onSelectedValueChanged: function(value) {
-                if(outputDeviceListLoaded) {
+                if(!root.initializing && !refreshingDevices && outputDeviceListLoaded &&
+                   speakerDeviceList.currentIndex >= 0 && value.length > 0 &&
+                   value !== speakerDeviceList.selectedDevice) {
+                    speakerDeviceList.selectedDevice = value
                     AppConfig.SpeakerDevice = value
                     audio.setSpeakerDevice(value)
                     applyChanges()
@@ -130,7 +163,8 @@ Item {
                     font.pixelSize: 13
                     leftPadding: 0
                     tooltipText: "Split output audio to separate channels (COM1 = Left, COM2 = Right)"
-                    onCheckedChanged: {
+                    onToggled: {
+                        if(root.initializing) return
                         AppConfig.SplitAudioChannels = switchSplitComChannels.checked
                         audio.setSplitAudioChannels(switchSplitComChannels.checked)
                         applyChanges()
@@ -142,7 +176,8 @@ Item {
                     text: "Enable HF Squelch"
                     font.pixelSize: 13
                     leftPadding: 0
-                    onCheckedChanged: {
+                    onToggled: {
+                        if(root.initializing) return
                         AppConfig.HFSquelchEnabled = switchEnableHfSquelch.checked
                         audio.enableHfSquelch(switchEnableHfSquelch.checked)
                         applyChanges()
@@ -154,7 +189,8 @@ Item {
                     text: "Disable Realistic Radio Effects"
                     leftPadding: 0
                     font.pixelSize: 13
-                    onCheckedChanged: {
+                    onToggled: {
+                        if(root.initializing) return
                         AppConfig.AudioEffectsDisabled = switchDisableRadioEffects.checked
                         audio.disableAudioEffects(switchDisableRadioEffects.checked)
                         applyChanges()
@@ -167,9 +203,10 @@ Item {
                     font.pixelSize: 13
                     Layout.maximumWidth: 300
                     leftPadding: 0
-                    onCheckedChanged: {
-                        applyChanges()
+                    onToggled: {
+                        if(root.initializing) return
                         AppConfig.AircraftRadioStackControlsVolume = switchAircraftVolumeKnobs.checked
+                        applyChanges()
                     }
                 }
 
@@ -179,8 +216,9 @@ Item {
                     font.pixelSize: 13
                     Layout.maximumWidth: 300
                     leftPadding: 0
-                    tooltipText: "Automatically reduce combined receive loudness when multiple radios are active"
-                    onCheckedChanged: {
+                    tooltipText: "Balance loudness between incoming voices and control combined radio output"
+                    onToggled: {
+                        if(root.initializing) return
                         AppConfig.AutoOutputVolumeBalance = switchAutoOutputBalance.checked
                         audio.setAutoOutputVolumeBalance(switchAutoOutputBalance.checked)
                         applyChanges()
@@ -191,9 +229,11 @@ Item {
                     id: com1Slider
                     comLabel: "COM1"
                     onVolumeValueChanged: function(volume) {
+                        if(root.initializing || !isFinite(volume)) return
+                        var value = roundedVolume(volume, 0, 100)
+                        AppConfig.Com1Volume = value
+                        audio.setCom1Volume(value)
                         applyChanges()
-                        AppConfig.Com1Volume = volume
-                        audio.setCom1Volume(volume)
                     }
                 }
 
@@ -201,20 +241,29 @@ Item {
                     id: com2Slider
                     comLabel: "COM2"
                     onVolumeValueChanged: function(volume) {
+                        if(root.initializing || !isFinite(volume)) return
+                        var value = roundedVolume(volume, 0, 100)
+                        AppConfig.Com2Volume = value
+                        audio.setCom2Volume(value)
                         applyChanges()
-                        AppConfig.Com2Volume = volume
-                        audio.setCom2Volume(volume)
                     }
                 }
 
                 VolumeSlider {
                     id: autoOutputBalanceStrength
                     comLabel: "Balance"
+                    Layout.preferredWidth: 300
+                    Layout.maximumWidth: 300
                     enabled: switchAutoOutputBalance.checked
+                    ToolTip.visible: balanceHover.hovered
+                    ToolTip.text: "Adjust how strongly incoming voice loudness is balanced (0–100%)."
+                    HoverHandler { id: balanceHover }
                     onVolumeValueChanged: function(volume) {
+                        if(root.initializing || !isFinite(volume)) return
+                        var value = roundedVolume(volume, 0, 100)
+                        AppConfig.AutoOutputVolumeBalanceStrength = value
+                        audio.setAutoOutputVolumeBalanceStrength(value)
                         applyChanges()
-                        AppConfig.AutoOutputVolumeBalanceStrength = volume
-                        audio.setAutoOutputVolumeBalanceStrength(volume)
                     }
                 }
             }
@@ -247,9 +296,11 @@ Item {
                     maxValue: 18
                     showPercent: false
                     onVolumeValueChanged: function(volume) {
+                        if(root.initializing || !isFinite(volume)) return
+                        var value = roundedVolume(volume, -60, 18)
+                        AppConfig.MicrophoneVolume = value
+                        audio.setMicrophoneVolume(value)
                         applyChanges()
-                        audio.setMicrophoneVolume(volume)
-                        AppConfig.MicrophoneVolume = volume
                     }
                 }
             }

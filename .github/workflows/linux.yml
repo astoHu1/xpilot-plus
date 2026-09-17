@@ -4,145 +4,166 @@ on:
   workflow_call:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   BUILD_TYPE: Release
-  VATSIM_CLIENT_ID: ${{ secrets.VATSIM_CLIENT_ID }}
-  VATSIM_CLIENT_KEY: ${{ secrets.VATSIM_CLIENT_KEY }}
-  VATSIM_TOWERVIEW_CLIENT_ID: ${{ secrets.VATSIM_TOWERVIEW_CLIENT_ID }}
-  CONFIG_ENCRYPTION_KEY: ${{ secrets.CONFIG_ENCRYPTION_KEY }}
+  RELEASE_BUILD: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+  VATSIM_AUTH_REF: ${{ vars.VATSIM_AUTH_REF }}
   CLIENT_DIR: ${{ github.workspace }}/client
   PLUGIN_DIR: ${{ github.workspace }}/plugin
-  IB_URL: https://releases.installbuilder.com/installbuilder/installbuilder-enterprise-24.3.0-linux-x64-installer.run
-  IB_LICENSE: ${{ secrets.INSTALLBUILDER_LICENSE }}
   QT_VERSION: "6.5.2"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash
 
     steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install \
-          libfontconfig1-dev libfreetype6-dev libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev libxcb1-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-keysyms1-dev libxcb-image0-dev libxcb-shm0-dev libxcb-icccm4-dev libxcb-sync-dev libxcb-xfixes0-dev libxcb-shape0-dev libxcb-randr0-dev libxcb-render-util0-dev libxcb-util-dev libxcb-xinerama0-dev libxcb-xkb-dev libxkbcommon-dev libxkbcommon-x11-dev xorg-dev \
-          libglu1-mesa-dev freeglut3-dev mesa-common-dev libglfw3-dev libgles2-mesa-dev \
-          libpulse-dev
-
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: true
+          persist-credentials: false
 
-        ### Buid Plugin ###
+      - name: Check release prerequisites
+        id: policy
+        env:
+          HAS_AUTH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN != '' }}
+          HAS_INSTALLER_LICENSE: ${{ secrets.INSTALLBUILDER_LICENSE != '' }}
+          HAS_CLIENT_ID: ${{ secrets.VATSIM_CLIENT_ID != '' }}
+          HAS_CLIENT_KEY: ${{ secrets.VATSIM_CLIENT_KEY != '' }}
+          HAS_TOWERVIEW_ID: ${{ secrets.VATSIM_TOWERVIEW_CLIENT_ID != '' }}
+          HAS_CONFIG_KEY: ${{ secrets.CONFIG_ENCRYPTION_KEY != '' }}
+        run: python3 scripts/ci_build_policy.py preflight linux
+
+      - name: Checkout approved real auth library (release only)
+        if: env.RELEASE_BUILD == 'true'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: xpilot-project/vatsim-auth
+          ref: ${{ env.VATSIM_AUTH_REF }}
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          path: dependencies/vatsim-auth
+          persist-credentials: false
+
+      - name: Record authentication provenance
+        run: python3 scripts/ci_build_policy.py manifest BUILD-STATUS.txt
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-venv patchelf libfontconfig1-dev libfreetype6-dev \
+            libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev \
+            libxcb1-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-keysyms1-dev libxcb-image0-dev \
+            libxcb-shm0-dev libxcb-icccm4-dev libxcb-sync-dev libxcb-xfixes0-dev libxcb-shape0-dev \
+            libxcb-randr0-dev libxcb-render-util0-dev libxcb-util-dev libxcb-xinerama0-dev \
+            libxcb-xkb-dev libxkbcommon-dev libxkbcommon-x11-dev xorg-dev libglu1-mesa-dev \
+            freeglut3-dev mesa-common-dev libglfw3-dev libgles2-mesa-dev libpulse-dev
 
       - name: Build plugin
-        working-directory: ${{ env.PLUGIN_DIR }}
         run: |
-          mkdir build && cd build
-          cmake .. && cmake --build . --config ${{ env.BUILD_TYPE }}
+          cmake -S "$PLUGIN_DIR" -B "$PLUGIN_DIR/build" -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+          cmake --build "$PLUGIN_DIR/build" --config "$BUILD_TYPE"
 
       - name: Package plugin
         run: |
-          mkdir -p ${{ github.workspace }}/xPilot/lin_x64
-          cp ${{ env.PLUGIN_DIR }}/build/lin_x64/xPilot.xpl ${{ github.workspace }}/xPilot/lin_x64
-          cp ${{ env.PLUGIN_DIR }}/3rdparty/fmod/libfmod.so ${{ github.workspace }}/xPilot/lin_x64
-          cp -R ${{ env.PLUGIN_DIR }}/Resources ${{ github.workspace }}/xPilot/
+          mkdir -p "xPilot/lin_x64"
+          cp "$PLUGIN_DIR/build/lin_x64/xPilot.xpl" "xPilot/lin_x64/"
+          cp "$PLUGIN_DIR/3rdparty/fmod/libfmod.so" "xPilot/lin_x64/"
+          cp -R "$PLUGIN_DIR/Resources" xPilot/
+          objcopy --only-keep-debug xPilot/lin_x64/xPilot.xpl xPilot/lin_x64/xPilot.debug
+          patchelf --set-rpath '$ORIGIN' xPilot/lin_x64/xPilot.xpl
+          patchelf --replace-needed libfmod.so.13 libfmod.so xPilot/lin_x64/xPilot.xpl
 
-      - name: Extract debug symbols
-        if: github.ref_type == 'tag' && contains(github.ref_name, 'v')
-        working-directory: ${{ env.PLUGIN_DIR }}/build/lin_x64
-        run: |
-          objcopy --only-keep-debug xPilot.xpl xPilot.debug
-          cp ${{ env.PLUGIN_DIR }}/build/lin_x64/xPilot.debug ${{ github.workspace }}/xPilot/lin_x64
-
-      - name: Fix FMOD rpath
-        working-directory: ${{ github.workspace }}/xPilot/lin_x64
-        run: |
-          sudo apt-get install patchelf
-          patchelf --set-rpath '$ORIGIN' xPilot.xpl
-          patchelf --replace-needed libfmod.so.13 libfmod.so xPilot.xpl
-
-      ### Build Client ###
+      - name: Cache Qt
+        id: qt-cache
+        uses: actions/cache@v4
+        with:
+          path: qt6
+          key: qt-${{ runner.os }}-${{ runner.arch }}-6.5.2-gcc_64-qtmultimedia-aqt3.3.0
 
       - name: Download Qt
+        if: steps.qt-cache.outputs.cache-hit != 'true'
         run: |
-          python3 -m pip install --disable-pip-version-check aqtinstall==3.3.0
-          python3 -m aqt install-qt linux desktop ${{ env.QT_VERSION }} gcc_64 -m qtmultimedia --outputdir qt6
+          python3 -m venv "$RUNNER_TEMP/aqt-venv"
+          "$RUNNER_TEMP/aqt-venv/bin/python" -m pip install --disable-pip-version-check aqtinstall==3.3.0
+          "$RUNNER_TEMP/aqt-venv/bin/python" -m aqt install-qt linux desktop "$QT_VERSION" gcc_64 -m qtmultimedia --outputdir qt6
 
       - name: Setup Qt
         run: |
-          echo "Qt6_DIR=$(pwd)/qt6/${{ env.QT_VERSION }}/gcc_64" >> $GITHUB_ENV
-          echo "QT_PLUGIN_PATH=$(pwd)/qt6/${{ env.QT_VERSION }}/gcc_64/plugins" >> $GITHUB_ENV
-          echo "QML2_IMPORT_PATH=$(pwd)/qt6/${{ env.QT_VERSION }}/gcc_64/qml" >> $GITHUB_ENV
-          echo "$(pwd)/qt6/${{ env.QT_VERSION }}/gcc_64/bin" >> $GITHUB_PATH
-          chmod -R +x qt6
+          echo "Qt6_HOME=$GITHUB_WORKSPACE/qt6/$QT_VERSION/gcc_64" >> "$GITHUB_ENV"
+          echo "$GITHUB_WORKSPACE/qt6/$QT_VERSION/gcc_64/bin" >> "$GITHUB_PATH"
 
       - name: Build client
-        working-directory: ${{ env.CLIENT_DIR }}
+        env:
+          VATSIM_CLIENT_ID: ${{ env.RELEASE_BUILD == 'true' && secrets.VATSIM_CLIENT_ID || '0' }}
+          VATSIM_CLIENT_KEY: ${{ env.RELEASE_BUILD == 'true' && secrets.VATSIM_CLIENT_KEY || 'development' }}
+          VATSIM_TOWERVIEW_CLIENT_ID: ${{ env.RELEASE_BUILD == 'true' && secrets.VATSIM_TOWERVIEW_CLIENT_ID || '0' }}
+          CONFIG_ENCRYPTION_KEY: ${{ env.RELEASE_BUILD == 'true' && secrets.CONFIG_ENCRYPTION_KEY || '0' }}
+          ALLOW_AUTH_STUB: ${{ steps.policy.outputs.allow_auth_stub }}
         run: |
-          mkdir build && cd build
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-            -DVATSIM_CLIENT_ID=${{ env.VATSIM_CLIENT_ID }} \
-            -DVATSIM_CLIENT_KEY=${{ env.VATSIM_CLIENT_KEY }} \
-            -DVATSIM_TOWERVIEW_CLIENT_ID=${{ env.VATSIM_TOWERVIEW_CLIENT_ID }} \
-            -DCONFIG_ENCRYPTION_KEY=${{ env.CONFIG_ENCRYPTION_KEY }} \
-            -DCMAKE_PREFIX_PATH=${{ env.Qt6_DIR }} \
-            -DOPENSSL_ROOT_DIR=${{ github.workspace }}/dependencies/platform/linux/openssl
-          cmake --build . --config ${{ env.BUILD_TYPE }}
-          mv ${{ env.CLIENT_DIR }}/build/xPilot ${{ env.CLIENT_DIR }}/build/xpilot
+          cmake -S "$CLIENT_DIR" -B "$CLIENT_DIR/build" \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DXPILOT_ALLOW_AUTH_STUB="$ALLOW_AUTH_STUB" \
+            -DVATSIM_CLIENT_ID="$VATSIM_CLIENT_ID" \
+            -DVATSIM_CLIENT_KEY="$VATSIM_CLIENT_KEY" \
+            -DVATSIM_TOWERVIEW_CLIENT_ID="$VATSIM_TOWERVIEW_CLIENT_ID" \
+            -DCONFIG_ENCRYPTION_KEY="$CONFIG_ENCRYPTION_KEY" \
+            -DCMAKE_PREFIX_PATH="$Qt6_HOME" \
+            -DOPENSSL_ROOT_DIR="$GITHUB_WORKSPACE/dependencies/platform/linux/openssl"
+          cmake --build "$CLIENT_DIR/build" --config "$BUILD_TYPE"
 
       - name: Build AppImage
         working-directory: ${{ env.CLIENT_DIR }}
         run: |
-          chmod +x ../scripts/appimage.sh
-          ../scripts/appimage.sh
+          mv build/xPilot build/xpilot
+          bash ../scripts/appimage.sh
 
       - name: Get version
         run: |
-          echo "XPILOT_VERSION=$(cat xpilot.json | jq -r 'if .is_beta == true then "\(.version.major).\(.version.minor).\(.version.patch)-beta.\(.beta_number)" else "\(.version.major).\(.version.minor).\(.version.patch)" end')" >> $GITHUB_ENV
+          echo "XPILOT_VERSION=$(jq -r 'if .is_beta == true then "\(.version.major).\(.version.minor).\(.version.patch)-beta.\(.beta_number)" else "\(.version.major).\(.version.minor).\(.version.patch)" end' xpilot.json)" >> "$GITHUB_ENV"
 
-      - name: Setup InstallBuilder
-        if: ${{ env.IB_LICENSE != '' }}
+      - name: Build installer (release only)
+        if: env.RELEASE_BUILD == 'true'
+        env:
+          IB_LICENSE: ${{ secrets.INSTALLBUILDER_LICENSE }}
         run: |
-          curl -k -L ${{ env.IB_URL }} --output ib.run
+          umask 077
+          license_file="$RUNNER_TEMP/xpilot-installbuilder-license.xml"
+          trap 'rm -f "$license_file"' EXIT
+          printf '%s' "$IB_LICENSE" > "$license_file"
+          curl --fail --show-error --location "https://releases.installbuilder.com/installbuilder/installbuilder-enterprise-24.3.0-linux-x64-installer.run" --output "ib.run"
           chmod +x ib.run
           ./ib.run --mode unattended --prefix ../ib
-          ../ib/bin/builder --version
-          echo "$IB_LICENSE" > lic.xml
-          echo "CLIENT_BUILD_DIR=${{ github.workspace }}/dist" >> $GITHUB_ENV
-          echo "PLUGIN_BUILD_DIR=${{ github.workspace }}/xPilot" >> $GITHUB_ENV
-
-      - name: Create installer
-        if: ${{ env.IB_LICENSE != '' }}
-        run: |
+          export CLIENT_BUILD_DIR="$GITHUB_WORKSPACE/dist"
+          export PLUGIN_BUILD_DIR="$GITHUB_WORKSPACE/xPilot"
           ../ib/bin/builder build installer/linux.xml \
-              --license lic.xml \
-              --setvars project.outputDirectory=$(pwd) \
-              --setvars project.version=${{ env.XPILOT_VERSION }}
-
-      - name: Rename Installer
-        if: ${{ env.IB_LICENSE != '' }}
-        shell: bash
-        run: |
-          mv xPilot-${{ env.XPILOT_VERSION }}-linux-x64-installer.run xPilot-${{ env.XPILOT_VERSION }}-Linux.run
-          chmod +x xPilot-${{ env.XPILOT_VERSION }}-Linux.run
+            --license "$license_file" \
+            --setvars "project.outputDirectory=$GITHUB_WORKSPACE" \
+            --setvars "project.version=$XPILOT_VERSION"
+          mv "xPilot-$XPILOT_VERSION-linux-x64-installer.run" "xPilot-$XPILOT_VERSION-Linux.run"
 
       - name: Upload installer artifact
-        if: ${{ env.IB_LICENSE != '' }}
+        if: env.RELEASE_BUILD == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: xPilot-${{ env.XPILOT_VERSION }}-Linux.zip
-          path: |
-            xPilot-${{ env.XPILOT_VERSION }}-Linux.run
+          path: xPilot-${{ env.XPILOT_VERSION }}-Linux.run
+          if-no-files-found: error
 
       - name: Create artifacts archive
         run: |
           mkdir -p linux/plugin
-          cp -R ${{ github.workspace }}/xPilot linux/plugin/
-          cp ${{ env.CLIENT_DIR }}/build/xpilot linux/xPilot
+          cp -R xPilot linux/plugin/
+          cp BUILD-STATUS.txt linux/
+          cp dist/xPilot.AppImage linux/
 
-      - name: Upload artifacts
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Linux.zip
-          path: ${{ github.workspace }}/linux
+          name: Linux.zip${{ steps.policy.outputs.artifact_suffix }}
+          path: linux
+          if-no-files-found: error

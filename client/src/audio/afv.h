@@ -20,6 +20,8 @@
 #define AFV_H
 
 #include <thread>
+#include <atomic>
+#include <mutex>
 #include <memory>
 
 #include <QtGlobal>
@@ -120,6 +122,8 @@ namespace xpilot
 
     private:
         void configureAudioDevices();
+        void scheduleConfigSave();
+        void flushConfigSave();
         void updateTransceivers();
         void updateRadioGain(unsigned int radio);
         float getBaseRadioGain(unsigned int radio) const;
@@ -128,14 +132,24 @@ namespace xpilot
         XplaneAdapter& m_xplaneAdapter;
         NetworkManager& m_networkManager;
         ControllerManager& m_controllerManager;
-        struct event_base* ev_base;
-        bool m_keepAlive = false;
+        std::unique_ptr<event_base, decltype(&event_base_free)> m_eventBase{nullptr, event_base_free};
+        std::atomic<bool> m_shuttingDown{false};
+        // Serialize native control calls with libevent dispatch. Audio callbacks are
+        // drained by Client::stopAudio() and never acquire this mutex.
+        std::recursive_mutex m_clientMutex;
         std::shared_ptr<afv_native::Client> m_client;
         QTimer m_transceiverTimer;
-        QTimer m_eventTimer;
+        QTimer m_configSaveTimer;
         QTimer m_rxTxQueryTimer;
         QTimer m_vuTimer;
-        QThread *m_workerThread;
+        std::unique_ptr<QThread> m_workerThread;
+        bool m_settingsOpen = false;
+        bool m_splitAudioChannels = false;
+        // Requested names, not proof of an open device: guards also check the
+        // native device pointer so failed starts and disconnects can be retried.
+        QString m_inputDevice;
+        QString m_headsetDevice;
+        QString m_speakerDevice;
 
         QFile m_afvLog;
         QTextStream m_logDataStream;
@@ -147,8 +161,8 @@ namespace xpilot
         void EnableVoiceTransmit();
         void DisableVoiceTransmit();
 
-        RadioStackState m_radioStackState;
-        UserAircraftData m_userAircraftData;
+        RadioStackState m_radioStackState{};
+        UserAircraftData m_userAircraftData{};
 
         QList<AudioDeviceInfo> m_outputDevices;
         QList<AudioDeviceInfo> m_inputDevices;

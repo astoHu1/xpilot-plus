@@ -1,0 +1,52 @@
+name: AFV offline tests
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            sanitizer: address
+          - os: macos-14
+            sanitizer: thread
+          - os: macos-14
+            sanitizer: address
+          - os: windows-2022
+            sanitizer: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          submodules: recursive
+      - name: Configure offline tests
+        run: cmake -S client/afv-native/tests -B build-afv-tests -DCMAKE_BUILD_TYPE=Debug -DAFV_SANITIZER=${{ matrix.sanitizer }}
+      - name: Build offline tests
+        run: cmake --build build-afv-tests --config Debug --parallel 3
+      - name: Run synthetic audio and concurrency tests
+        env:
+          ASAN_OPTIONS: detect_leaks=${{ runner.os == 'Linux' && '1' || '0' }}:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          TSAN_OPTIONS: halt_on_error=1
+        run: ctest --test-dir build-afv-tests -C Debug --output-on-failure
+
+  wrapper:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          submodules: recursive
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.5.2'
+          cache: true
+      - name: Configure wrapper tests with fake audio and network endpoints
+        run: cmake -S client/tests/afv-wrapper -B build-afv-wrapper -DCMAKE_BUILD_TYPE=Debug
+      - name: Build wrapper tests
+        run: cmake --build build-afv-wrapper --parallel 3
+      - name: Test configuration and callback lifecycle without a GUI
+        run: ctest --test-dir build-afv-wrapper --output-on-failure

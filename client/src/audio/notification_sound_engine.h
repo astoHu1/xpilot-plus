@@ -2,6 +2,7 @@
 #define NOTIFICATION_SOUND_ENGINE_H
 
 #include <QObject>
+#include <QVariant>
 #include <QMediaPlayer>
 #include <QAudioOutput>
 #include <QMediaDevices>

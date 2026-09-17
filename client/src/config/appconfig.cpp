@@ -17,6 +17,7 @@
 */
 
 #include <QtGlobal>
+#include <cmath>
 #include <QCoreApplication>
 #include <QGuiApplication>
 #include <QScreen>
@@ -29,6 +30,19 @@
 #include "common/build_config.h"
 
 using namespace xpilot;
+
+namespace
+{
+    int audioSetting(const QJsonObject &object, const QString &key, int fallback, int minimum, int maximum)
+    {
+        const auto entry = object.value(key);
+        if(!entry.isDouble()) return fallback;
+        const double value = entry.toDouble();
+        if(!std::isfinite(value)) return fallback;
+        // Match the rounded integer displayed by the QML sliders.
+        return static_cast<int>(std::floor(qBound(double(minimum), value, double(maximum)) + 0.5));
+    }
+}
 
 AppConfig* AppConfig::instance = nullptr;
 
@@ -80,7 +94,7 @@ void AppConfig::loadConfig()
     }
 
     QScreen *primaryScreen = QGuiApplication::primaryScreen();
-    QRect primaryGeometry = primaryScreen->availableGeometry();
+    QRect primaryGeometry = primaryScreen ? primaryScreen->availableGeometry() : QRect(0, 0, DefaultWidth, DefaultHeight);
 
     QFile configFile(dataRoot() + "AppConfig.json");
     if(!configFile.open(QIODevice::ReadOnly)) {
@@ -100,7 +114,7 @@ void AppConfig::loadConfig()
         AutoModeC = true;
         Com1Volume = 50;
         Com2Volume = 50;
-        AutoOutputVolumeBalance = true;
+        AutoOutputVolumeBalance = false;
         AutoOutputVolumeBalanceStrength = 60;
         Com1OnHeadset = true;
         Com2OnHeadset = true;
@@ -146,13 +160,13 @@ void AppConfig::loadConfig()
     HeadsetDevice = getJsonValue(jsonMap, "HeadsetDevice", QString());
     NotificationAudioDevice = getJsonValue(jsonMap, "NotificationAudioDevice", QString());
     SplitAudioChannels = getJsonValue(jsonMap, "SplitAudioChannels", false);
-    Com1Volume = qMin(qMax(getJsonValue<int>(jsonMap, "Com1Volume", 50), 0), 100);
-    Com2Volume = qMin(qMax(getJsonValue<int>(jsonMap, "Com2Volume", 50), 0), 100);
-    AutoOutputVolumeBalance = getJsonValue(jsonMap, "AutoOutputVolumeBalance", true);
-    AutoOutputVolumeBalanceStrength = qMin(qMax(getJsonValue<int>(jsonMap, "AutoOutputVolumeBalanceStrength", 60), 0), 100);
+    Com1Volume = audioSetting(jsonObj, "Com1Volume", 50, 0, 100);
+    Com2Volume = audioSetting(jsonObj, "Com2Volume", 50, 0, 100);
+    AutoOutputVolumeBalance = getJsonValue(jsonMap, "AutoOutputVolumeBalance", false);
+    AutoOutputVolumeBalanceStrength = audioSetting(jsonObj, "AutoOutputVolumeBalanceStrength", 60, 0, 100);
     Com1OnHeadset = getJsonValue(jsonMap, "Com1OnHeadset", true);
     Com2OnHeadset = getJsonValue(jsonMap, "Com2OnHeadset", true);
-    MicrophoneVolume = qMin(qMax(getJsonValue(jsonMap, "MicrophoneVolume", 0), -60), 18);
+    MicrophoneVolume = audioSetting(jsonObj, "MicrophoneVolume", 0, -60, 18);
     AudioEffectsDisabled = getJsonValue(jsonMap, "AudioEffectsDisabled", false);
     HFSquelchEnabled = getJsonValue(jsonMap, "HFSquelchEnabled", false);
     AutoModeC = getJsonValue(jsonMap, "AutoModeC", true);
@@ -326,11 +340,11 @@ void AppConfig::applySettings()
     InputDevice = tempInputDevice;
     NotificationAudioDevice = tempNotificationAudioDevice;
     SplitAudioChannels = tempSplitAudioChannels;
-    Com1Volume = tempCom1Volume;
-    Com2Volume = tempCom2Volume;
+    Com1Volume = qBound(0, tempCom1Volume, 100);
+    Com2Volume = qBound(0, tempCom2Volume, 100);
     AutoOutputVolumeBalance = tempAutoOutputVolumeBalance;
-    AutoOutputVolumeBalanceStrength = tempAutoOutputVolumeBalanceStrength;
-    MicrophoneVolume = tempMicrophoneVolume;
+    AutoOutputVolumeBalanceStrength = qBound(0, tempAutoOutputVolumeBalanceStrength, 100);
+    MicrophoneVolume = qBound(-60, tempMicrophoneVolume, 18);
     AudioEffectsDisabled = tempAudioEffectsDisabled;
     HFSquelchEnabled = tempHFSquelchEnabled;
     AutoModeC = tempAutoModeC;
@@ -342,6 +356,10 @@ void AppConfig::applySettings()
     AlertDisconnect = tempAlertDisconnect;
     KeepWindowVisible = tempKeepWindowVisible;
     AircraftRadioStackControlsVolume = tempAircraftRadioStackControlsVolume;
+    // Apply is a commit boundary, including when the window remains open.
+    if(!saveConfig()) {
+        emit permissionError("Failed to write configuration file. Please make sure you have correct read/write permissions to " + dataRoot());
+    }
 }
 
 QString AppConfig::getNetworkServer()

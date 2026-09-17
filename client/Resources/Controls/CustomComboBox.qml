@@ -3,6 +3,7 @@ import QtQuick.Window
 import QtQuick.Layouts
 import QtQuick.Controls
 import QtQuick.Controls.Basic
+import QtQuick.Controls.impl
 import QtQuick.Shapes
 import QtQml.Models
 

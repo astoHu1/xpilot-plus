@@ -2,6 +2,13 @@ cmake_minimum_required(VERSION 3.16)
 
 project(vatsim-auth LANGUAGES CXX)
 
+# This public checkout is deliberately incapable of VATSIM authentication.
+option(XPILOT_ALLOW_AUTH_STUB "Allow development builds that cannot authenticate to VATSIM" OFF)
+if(NOT XPILOT_ALLOW_AUTH_STUB)
+    message(FATAL_ERROR "The public vatsim-auth stub cannot be released. Supply the real auth library, or explicitly set XPILOT_ALLOW_AUTH_STUB=ON for an unverified development build.")
+endif()
+message(WARNING "UNVERIFIED DEVELOPMENT BUILD: vatsim-auth is a stub; VATSIM authentication will not work.")
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 

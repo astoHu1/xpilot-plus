@@ -4,231 +4,247 @@ on:
   workflow_call:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
-  MIN_OS_VERSION: 11.0
   BUILD_TYPE: Release
-  VATSIM_CLIENT_ID: ${{ secrets.VATSIM_CLIENT_ID }}
-  VATSIM_CLIENT_KEY: ${{ secrets.VATSIM_CLIENT_KEY }}
-  VATSIM_TOWERVIEW_CLIENT_ID: ${{ secrets.VATSIM_TOWERVIEW_CLIENT_ID }}
-  CONFIG_ENCRYPTION_KEY: ${{ secrets.CONFIG_ENCRYPTION_KEY }}
+  RELEASE_BUILD: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+  VATSIM_AUTH_REF: ${{ vars.VATSIM_AUTH_REF }}
   CLIENT_DIR: ${{ github.workspace }}/client
   PLUGIN_DIR: ${{ github.workspace }}/plugin
-  IB_URL: https://releases.installbuilder.com/installbuilder/installbuilder-enterprise-24.3.0-osx-installer.dmg
-  IB_LICENSE: ${{ secrets.INSTALLBUILDER_LICENSE }}
-  APPLE_SIGNING_CERTIFICATE: ${{ secrets.APPLE_SIGNING_CERTIFICATE }}
-  APPLE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
-  APPLE_SIGNING_CERTIFICATE_IDENTITY: ${{ secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY }}
-  NOTARIZATION_USERNAME: ${{ secrets.NOTARIZATION_USERNAME }}
-  NOTARIZATION_PASSWORD: ${{ secrets.NOTARIZATION_PASSWORD }}
-  APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
   QT_VERSION: "6.5.2"
+  MIN_OS_VERSION: "11.0"
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: true
+          persist-credentials: false
 
-      - name: Load developer certificate
-        if: ${{ env.APPLE_SIGNING_CERTIFICATE != '' }}
+      - name: Check release prerequisites
+        id: policy
         env:
-          CERTIFICATE: ${{ env.APPLE_SIGNING_CERTIFICATE }}
-          CERTIFICATE_PASSWORD: ${{ env.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
-        run: ./scripts/make_keychain.sh
+          HAS_AUTH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN != '' }}
+          HAS_INSTALLER_LICENSE: ${{ secrets.INSTALLBUILDER_LICENSE != '' }}
+          HAS_CLIENT_ID: ${{ secrets.VATSIM_CLIENT_ID != '' }}
+          HAS_CLIENT_KEY: ${{ secrets.VATSIM_CLIENT_KEY != '' }}
+          HAS_TOWERVIEW_ID: ${{ secrets.VATSIM_TOWERVIEW_CLIENT_ID != '' }}
+          HAS_CONFIG_KEY: ${{ secrets.CONFIG_ENCRYPTION_KEY != '' }}
+          HAS_CERTIFICATE: ${{ secrets.APPLE_SIGNING_CERTIFICATE != '' }}
+          HAS_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD != '' }}
+          HAS_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
+          HAS_NOTARIZATION_USERNAME: ${{ secrets.NOTARIZATION_USERNAME != '' }}
+          HAS_NOTARIZATION_PASSWORD: ${{ secrets.NOTARIZATION_PASSWORD != '' }}
+          HAS_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' }}
+        run: python3 scripts/ci_build_policy.py preflight macos
 
-      ### Buid Plugin ###
+      - name: Checkout approved real auth library (release only)
+        if: env.RELEASE_BUILD == 'true'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: xpilot-project/vatsim-auth
+          ref: ${{ env.VATSIM_AUTH_REF }}
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          path: dependencies/vatsim-auth
+          persist-credentials: false
+
+      - name: Record authentication provenance
+        run: python3 scripts/ci_build_policy.py manifest BUILD-STATUS.txt
 
       - name: Build plugin
-        working-directory: ${{ env.PLUGIN_DIR }}
         run: |
-          mkdir build && cd build
-          cmake .. -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MIN_OS_VERSION }} && cmake --build . --config ${{ env.BUILD_TYPE }}
-
-      - name: Extract debug symbols
-        working-directory: ${{ env.PLUGIN_DIR }}/build/mac_x64
-        run: |
-          dsymutil xPilot.xpl -o xPilot.dSYM
+          cmake -S "$PLUGIN_DIR" -B "$PLUGIN_DIR/build" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" -DCMAKE_OSX_DEPLOYMENT_TARGET="$MIN_OS_VERSION"
+          cmake --build "$PLUGIN_DIR/build" --config "$BUILD_TYPE"
 
       - name: Package plugin
         run: |
-          mkdir -p ${{ github.workspace }}/xPilot/mac_x64
-          cp ${{ env.PLUGIN_DIR }}/build/mac_x64/xPilot.xpl ${{ github.workspace }}/xPilot/mac_x64
-          cp -R ${{ env.PLUGIN_DIR }}/build/mac_x64/xPilot.dSYM ${{ github.workspace }}/xPilot/mac_x64
-          cp ${{ env.PLUGIN_DIR }}/3rdparty/fmod/libfmod.dylib ${{ github.workspace }}/xPilot/mac_x64
-          cp -R ${{ env.PLUGIN_DIR }}/Resources ${{ github.workspace }}/xPilot/
+          mkdir -p "xPilot/mac_x64"
+          cp "$PLUGIN_DIR/build/mac_x64/xPilot.xpl" "xPilot/mac_x64/"
+          cp "$PLUGIN_DIR/3rdparty/fmod/libfmod.dylib" "xPilot/mac_x64/"
+          cp -R "$PLUGIN_DIR/Resources" xPilot/
+          dsymutil "$PLUGIN_DIR/build/mac_x64/xPilot.xpl" -o xPilot/mac_x64/xPilot.dSYM
+          install_name_tool -id @executable_path/../../../Resources/plugins/xPilot/mac_x64/libfmod.dylib xPilot/mac_x64/libfmod.dylib
+          install_name_tool -change @rpath/libfmod.dylib @executable_path/../../../Resources/plugins/xPilot/mac_x64/libfmod.dylib xPilot/mac_x64/xPilot.xpl
 
-      - name: Fix FMOD rpath
-        working-directory: ${{ github.workspace }}/xPilot/mac_x64
-        run: |
-          install_name_tool -id @executable_path/../../../Resources/plugins/xPilot/mac_x64/libfmod.dylib libfmod.dylib
-          install_name_tool -change @rpath/libfmod.dylib @executable_path/../../../Resources/plugins/xPilot/mac_x64/libfmod.dylib xPilot.xpl
-
-      - name: Code sign plugin
-        working-directory: ${{ github.workspace }}/xPilot/mac_x64
-        shell: bash
-        run: |
-          if [[ -n "${APPLE_SIGNING_CERTIFICATE_IDENTITY}" ]]; then
-            codesign --force --options runtime --timestamp --sign "${APPLE_SIGNING_CERTIFICATE_IDENTITY}" libfmod.dylib
-            codesign --force --options runtime --timestamp --sign "${APPLE_SIGNING_CERTIFICATE_IDENTITY}" xPilot.xpl
-          else
-            codesign --force --sign - libfmod.dylib
-            codesign --force --sign - xPilot.xpl
-          fi
-          codesign --verify --strict libfmod.dylib
-          codesign --verify --strict xPilot.xpl
-
-      ### Build Client ###
+      - name: Cache Qt
+        id: qt-cache
+        uses: actions/cache@v4
+        with:
+          path: qt6
+          key: qt-${{ runner.os }}-${{ runner.arch }}-6.5.2-macos-qtmultimedia-aqt3.3.0
 
       - name: Download Qt
+        if: steps.qt-cache.outputs.cache-hit != 'true'
         run: |
-          python3 -m venv /tmp/aqt-venv
-          source /tmp/aqt-venv/bin/activate
-          python -m pip install --disable-pip-version-check aqtinstall==3.3.0
-          python -m aqt install-qt mac desktop ${{ env.QT_VERSION }} clang_64 -m qtmultimedia --outputdir ${{ github.workspace }}/qt6
+          python3 -m venv "$RUNNER_TEMP/aqt-venv"
+          "$RUNNER_TEMP/aqt-venv/bin/python" -m pip install --disable-pip-version-check aqtinstall==3.3.0
+          "$RUNNER_TEMP/aqt-venv/bin/python" -m aqt install-qt mac desktop "$QT_VERSION" clang_64 -m qtmultimedia --outputdir qt6
 
       - name: Setup Qt
         run: |
-          echo "Qt6_DIR=$(pwd)/qt6/${{ env.QT_VERSION }}/macos" >> $GITHUB_ENV
-          echo "QT_PLUGIN_PATH=$(pwd)/qt6/${{ env.QT_VERSION }}/macos/plugins" >> $GITHUB_ENV
-          echo "QML2_IMPORT_PATH=$(pwd)/qt6/${{ env.QT_VERSION }}/macos/qml" >> $GITHUB_ENV
-          echo "$(pwd)/qt6/${{ env.QT_VERSION }}/macos/bin" >> $GITHUB_PATH
-          python3 - <<'PY'
-          from pathlib import Path
-
-          qt_lib = Path("qt6/${{ env.QT_VERSION }}/macos/lib")
-          finder = qt_lib / "cmake/Qt6/FindWrapOpenGL.cmake"
-          text = finder.read_text()
-          block = '''        find_library(WrapOpenGL_AGL NAMES AGL)
-                  if(WrapOpenGL_AGL)
-                      set(__opengl_agl_fw_path "${WrapOpenGL_AGL}")
-                  endif()
-                  if(NOT __opengl_agl_fw_path)
-                      set(__opengl_agl_fw_path "-framework AGL")
-                  endif()
-
-          '''
-          text = text.replace(block, "")
-          text = text.replace("        target_link_libraries(WrapOpenGL::WrapOpenGL INTERFACE ${__opengl_agl_fw_path})\n", "")
-          finder.write_text(text)
-
-          for path in qt_lib.glob("*.prl"):
-              path.write_text(path.read_text().replace("-framework AGL", ""))
-          PY
-          chmod -R +x qt6
+          echo "Qt6_HOME=$GITHUB_WORKSPACE/qt6/$QT_VERSION/macos" >> "$GITHUB_ENV"
+          echo "$GITHUB_WORKSPACE/qt6/$QT_VERSION/macos/bin" >> "$GITHUB_PATH"
+          python3 scripts/patch_qt_macos.py "qt6/$QT_VERSION/macos/lib"
 
       - name: Build client
-        working-directory: ${{ env.CLIENT_DIR }}
+        env:
+          VATSIM_CLIENT_ID: ${{ env.RELEASE_BUILD == 'true' && secrets.VATSIM_CLIENT_ID || '0' }}
+          VATSIM_CLIENT_KEY: ${{ env.RELEASE_BUILD == 'true' && secrets.VATSIM_CLIENT_KEY || 'development' }}
+          VATSIM_TOWERVIEW_CLIENT_ID: ${{ env.RELEASE_BUILD == 'true' && secrets.VATSIM_TOWERVIEW_CLIENT_ID || '0' }}
+          CONFIG_ENCRYPTION_KEY: ${{ env.RELEASE_BUILD == 'true' && secrets.CONFIG_ENCRYPTION_KEY || '0' }}
+          ALLOW_AUTH_STUB: ${{ steps.policy.outputs.allow_auth_stub }}
         run: |
-          mkdir build && cd build
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-            -DVATSIM_CLIENT_ID=${{ env.VATSIM_CLIENT_ID }} \
-            -DVATSIM_CLIENT_KEY=${{ env.VATSIM_CLIENT_KEY }} \
-            -DVATSIM_TOWERVIEW_CLIENT_ID=${{ env.VATSIM_TOWERVIEW_CLIENT_ID }} \
-            -DCONFIG_ENCRYPTION_KEY=${{ env.CONFIG_ENCRYPTION_KEY }} \
-            -DCMAKE_PREFIX_PATH=${{ env.Qt6_DIR }} \
-            -DOPENSSL_ROOT_DIR=${{ github.workspace }}/dependencies/platform/macos/openssl \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MIN_OS_VERSION }}
-          cmake --build . --config ${{ env.BUILD_TYPE }}
+          cmake -S "$CLIENT_DIR" -B "$CLIENT_DIR/build" \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DXPILOT_ALLOW_AUTH_STUB="$ALLOW_AUTH_STUB" \
+            -DVATSIM_CLIENT_ID="$VATSIM_CLIENT_ID" \
+            -DVATSIM_CLIENT_KEY="$VATSIM_CLIENT_KEY" \
+            -DVATSIM_TOWERVIEW_CLIENT_ID="$VATSIM_TOWERVIEW_CLIENT_ID" \
+            -DCONFIG_ENCRYPTION_KEY="$CONFIG_ENCRYPTION_KEY" \
+            -DCMAKE_PREFIX_PATH="$Qt6_HOME" \
+            -DOPENSSL_ROOT_DIR="$GITHUB_WORKSPACE/dependencies/platform/macos/openssl" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MIN_OS_VERSION"
+          cmake --build "$CLIENT_DIR/build" --config "$BUILD_TYPE"
+
+      # Import keys only after all compilation and dependency installation.
+      - name: Load developer certificate
+        if: env.RELEASE_BUILD == 'true'
+        env:
+          CERTIFICATE: ${{ secrets.APPLE_SIGNING_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
+        run: ./scripts/make_keychain.sh
+
+      - name: Code sign plugin
+        env:
+          SIGNING_IDENTITY: ${{ env.RELEASE_BUILD == 'true' && secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY || '' }}
+        run: |
+          options=(--force --sign "${SIGNING_IDENTITY:--}")
+          if [[ "$RELEASE_BUILD" == true ]]; then
+            options+=(--options runtime --timestamp)
+          fi
+          for binary in xPilot/mac_x64/libfmod.dylib xPilot/mac_x64/xPilot.xpl; do
+            codesign "${options[@]}" "$binary"
+            lipo "$binary" -verify_arch x86_64 arm64
+            codesign --verify --strict --all-architectures "$binary"
+          done
 
       - name: Deploy application
-        shell: bash
+        env:
+          SIGNING_IDENTITY: ${{ env.RELEASE_BUILD == 'true' && secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY || '' }}
         run: |
-          ./scripts/package_macos.sh \
-            "${CLIENT_DIR}/build/xPilot.app" \
-            "${CLIENT_DIR}/Resources" \
-            "${CLIENT_DIR}/entitlements.plist" \
-            "${APPLE_SIGNING_CERTIFICATE_IDENTITY}"
+          ./scripts/package_macos.sh "$CLIENT_DIR/build/xPilot.app" \
+            "$CLIENT_DIR/Resources" "$CLIENT_DIR/entitlements.plist" "$SIGNING_IDENTITY"
 
-      - name: Verify application bundle
-        shell: bash
-        run: ./scripts/verify_macos_app.sh "${CLIENT_DIR}/build/xPilot.app"
+      - name: Verify application bundle (static only)
+        env:
+          SIGNING_TEAM: ${{ env.RELEASE_BUILD == 'true' && secrets.APPLE_TEAM_ID || '' }}
+        run: |
+          options=(--signature development)
+          if [[ "$RELEASE_BUILD" == true ]]; then
+            options=(--signature developer-id --team-id "$SIGNING_TEAM")
+          fi
+          ./scripts/verify_macos_app.sh "$CLIENT_DIR/build/xPilot.app" "${options[@]}"
 
       - name: Notarize application bundle
-        if: ${{ env.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' && env.NOTARIZATION_USERNAME != '' && env.NOTARIZATION_PASSWORD != '' && env.APPLE_TEAM_ID != '' }}
-        shell: bash
+        if: env.RELEASE_BUILD == 'true'
+        env:
+          NOTARIZATION_USERNAME: ${{ secrets.NOTARIZATION_USERNAME }}
+          NOTARIZATION_PASSWORD: ${{ secrets.NOTARIZATION_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          ditto -c -k --keepParent "${CLIENT_DIR}/build/xPilot.app" xPilot-notarization.zip
+          ditto -c -k --keepParent "$CLIENT_DIR/build/xPilot.app" xPilot-notarization.zip
           xcrun notarytool submit xPilot-notarization.zip \
-            --apple-id "${NOTARIZATION_USERNAME}" \
-            --password "${NOTARIZATION_PASSWORD}" \
-            --team-id "${APPLE_TEAM_ID}" \
-            --wait
-          xcrun stapler staple "${CLIENT_DIR}/build/xPilot.app"
-          xcrun stapler validate "${CLIENT_DIR}/build/xPilot.app"
+            --apple-id "$NOTARIZATION_USERNAME" --password "$NOTARIZATION_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$CLIENT_DIR/build/xPilot.app"
+          xcrun stapler validate "$CLIENT_DIR/build/xPilot.app"
 
       - name: Get version
-        shell: bash
         run: |
-          echo "XPILOT_VERSION=$(cat xpilot.json | jq -r 'if .is_beta == true then "\(.version.major).\(.version.minor).\(.version.patch)-beta.\(.beta_number)" else "\(.version.major).\(.version.minor).\(.version.patch)" end')" >> $GITHUB_ENV
+          echo "XPILOT_VERSION=$(jq -r 'if .is_beta == true then "\(.version.major).\(.version.minor).\(.version.patch)-beta.\(.beta_number)" else "\(.version.major).\(.version.minor).\(.version.patch)" end' xpilot.json)" >> "$GITHUB_ENV"
 
-      - name: Setup InstallBuilder
-        if: ${{ env.IB_LICENSE != '' && env.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
-        shell: bash
+      - name: Build installer (release only)
+        if: env.RELEASE_BUILD == 'true'
+        env:
+          IB_LICENSE: ${{ secrets.INSTALLBUILDER_LICENSE }}
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY }}
         run: |
-          curl -k -L ${{ env.IB_URL }} --output ib.dmg
+          umask 077
+          license_file="$RUNNER_TEMP/xpilot-installbuilder-license.xml"
+          trap 'rm -f "$license_file"' EXIT
+          printf '%s' "$IB_LICENSE" > "$license_file"
+          curl --fail --show-error --location "https://releases.installbuilder.com/installbuilder/installbuilder-enterprise-24.3.0-osx-installer.dmg" --output "ib.dmg"
           hdiutil attach ib.dmg
           /Volumes/InstallBuilder\ Enterprise/*.app/Contents/MacOS/installbuilder.sh --mode unattended --prefix ../ib
-          ../ib/bin/builder --version
-          echo "$IB_LICENSE" > lic.xml
-          echo "CLIENT_BUILD_DIR=${{ env.CLIENT_DIR }}/build" >> $GITHUB_ENV
-          echo "PLUGIN_BUILD_DIR=${{ github.workspace }}/xPilot" >> $GITHUB_ENV
-
-      - name: Create installer
-        if: ${{ env.IB_LICENSE != '' && env.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
-        shell: bash
-        run: |
+          export CLIENT_BUILD_DIR="$CLIENT_DIR/build"
+          export PLUGIN_BUILD_DIR="$GITHUB_WORKSPACE/xPilot"
           ../ib/bin/builder build installer/macos.xml \
-              --license lic.xml \
-              --setvars project.outputDirectory=$(pwd) \
-              --setvars project.version=${{ env.XPILOT_VERSION }} \
-              --setvars apple_signing_identity=${{ secrets.APPLE_SIGNING_CERTIFICATE_IDENTITY }} \
-              --setvars password=${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
+            --license "$license_file" \
+            --setvars "project.outputDirectory=$GITHUB_WORKSPACE" \
+            --setvars "project.version=$XPILOT_VERSION" \
+            --setvars "apple_signing_identity=$SIGNING_IDENTITY"
 
       - name: Notarize installer
-        if: ${{ env.IB_LICENSE != '' && env.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' && env.NOTARIZATION_USERNAME != '' && env.NOTARIZATION_PASSWORD != '' && env.APPLE_TEAM_ID != '' }}
-        shell: bash
+        if: env.RELEASE_BUILD == 'true'
+        env:
+          NOTARIZATION_USERNAME: ${{ secrets.NOTARIZATION_USERNAME }}
+          NOTARIZATION_PASSWORD: ${{ secrets.NOTARIZATION_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           xcrun notarytool submit xPilot.dmg \
-            --apple-id "${NOTARIZATION_USERNAME}" \
-            --password "${NOTARIZATION_PASSWORD}" \
-            --team-id "${APPLE_TEAM_ID}" \
-            --wait
+            --apple-id "$NOTARIZATION_USERNAME" --password "$NOTARIZATION_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait
           xcrun stapler staple xPilot.dmg
           xcrun stapler validate xPilot.dmg
-
-      - name: Rename dmg
-        if: ${{ env.IB_LICENSE != '' && env.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
-        run: |
-          mv xPilot.dmg xPilot-${{ env.XPILOT_VERSION }}-MacOS.dmg
+          mv xPilot.dmg "xPilot-$XPILOT_VERSION-MacOS.dmg"
 
       - name: Upload installer artifact
-        if: ${{ env.IB_LICENSE != '' && env.APPLE_SIGNING_CERTIFICATE_IDENTITY != '' }}
+        if: env.RELEASE_BUILD == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: xPilot-${{ env.XPILOT_VERSION }}-MacOS.zip
-          path: |
-            xPilot-${{ env.XPILOT_VERSION }}-MacOS.dmg
+          name: xPilot-${{ env.XPILOT_VERSION }}-macOS.zip
+          path: xPilot-${{ env.XPILOT_VERSION }}-MacOS.dmg
+          if-no-files-found: error
 
       - name: Create artifacts archive
         run: |
           mkdir -p macos/plugin
-          cp -R ${{ github.workspace }}/xPilot macos/plugin/
-          cp -R ${{ env.CLIENT_DIR }}/build/xPilot.app macos/xPilot.app
-          ditto -c -k --sequesterRsrc macos macOS.zip
+          cp -R xPilot macos/plugin/
+          cp BUILD-STATUS.txt macos/
+          ditto "$CLIENT_DIR/build/xPilot.app" macos/xPilot.app
+          ditto -c -k macos macOS.zip
 
-      - name: Verify archived application bundle
-        shell: bash
+      - name: Verify archived application bundle (static only)
+        env:
+          SIGNING_TEAM: ${{ env.RELEASE_BUILD == 'true' && secrets.APPLE_TEAM_ID || '' }}
         run: |
-          ARCHIVE_CHECK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/xpilot-archive.XXXXXX")
-          ditto -x -k macOS.zip "$ARCHIVE_CHECK_DIR"
-          ./scripts/verify_macos_app.sh "$ARCHIVE_CHECK_DIR/xPilot.app"
+          archive_check_dir=$(mktemp -d "$RUNNER_TEMP/xpilot-archive.XXXXXX")
+          trap 'rm -rf "$archive_check_dir"' EXIT
+          ditto -x -k macOS.zip "$archive_check_dir"
+          options=(--signature development)
+          if [[ "$RELEASE_BUILD" == true ]]; then
+            options=(--signature developer-id --team-id "$SIGNING_TEAM")
+          fi
+          ./scripts/verify_macos_app.sh "$archive_check_dir/xPilot.app" "${options[@]}"
 
-      - name: Upload artifacts
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macOS.zip
-          path: ${{ github.workspace }}/macOS.zip
+          name: macOS.zip${{ steps.policy.outputs.artifact_suffix }}
+          path: macOS.zip
+          if-no-files-found: error
+
+      - name: Remove signing keychain
+        if: always() && env.RELEASE_BUILD == 'true'
+        run: |
+          if [[ -f "$RUNNER_TEMP/xpilot-signing.keychain-db" ]]; then
+            security delete-keychain "$RUNNER_TEMP/xpilot-signing.keychain-db"
+          fi

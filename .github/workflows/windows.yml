@@ -4,125 +4,165 @@ on:
   workflow_call:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   BUILD_TYPE: Release
-  VATSIM_CLIENT_ID: ${{ secrets.VATSIM_CLIENT_ID }}
-  VATSIM_CLIENT_KEY: ${{ secrets.VATSIM_CLIENT_KEY }}
-  VATSIM_TOWERVIEW_CLIENT_ID: ${{ secrets.VATSIM_TOWERVIEW_CLIENT_ID }}
-  CONFIG_ENCRYPTION_KEY: ${{ secrets.CONFIG_ENCRYPTION_KEY }}
+  RELEASE_BUILD: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+  VATSIM_AUTH_REF: ${{ vars.VATSIM_AUTH_REF }}
   CLIENT_DIR: ${{ github.workspace }}/client
   PLUGIN_DIR: ${{ github.workspace }}/plugin
-  IB_URL: https://releases.installbuilder.com/installbuilder/installbuilder-enterprise-24.3.0-windows-x64-installer.exe
-  IB_LICENSE: ${{ secrets.INSTALLBUILDER_LICENSE }}
   QT_VERSION: "6.5.2"
 
 jobs:
   build:
-    # Qt 6.5's MSVC 2019 headers are incompatible with VS 2026 on windows-latest.
     runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: true
+          persist-credentials: false
 
-      ### Buid Plugin ###
+      - name: Check release prerequisites
+        id: policy
+        env:
+          HAS_AUTH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN != '' }}
+          HAS_INSTALLER_LICENSE: ${{ secrets.INSTALLBUILDER_LICENSE != '' }}
+          HAS_CLIENT_ID: ${{ secrets.VATSIM_CLIENT_ID != '' }}
+          HAS_CLIENT_KEY: ${{ secrets.VATSIM_CLIENT_KEY != '' }}
+          HAS_TOWERVIEW_ID: ${{ secrets.VATSIM_TOWERVIEW_CLIENT_ID != '' }}
+          HAS_CONFIG_KEY: ${{ secrets.CONFIG_ENCRYPTION_KEY != '' }}
+        run: python scripts/ci_build_policy.py preflight windows
+
+      - name: Checkout approved real auth library (release only)
+        if: env.RELEASE_BUILD == 'true'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: xpilot-project/vatsim-auth
+          ref: ${{ env.VATSIM_AUTH_REF }}
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          path: dependencies/vatsim-auth
+          persist-credentials: false
+
+      - name: Record authentication provenance
+        run: python scripts/ci_build_policy.py manifest BUILD-STATUS.txt
 
       - name: Build plugin
-        working-directory: ${{ env.PLUGIN_DIR }}
         run: |
-          mkdir build
-          cd build
-          cmake ..
-          cmake --build . --config ${{ env.BUILD_TYPE }}
+          cmake -S "$PLUGIN_DIR" -B "$PLUGIN_DIR/build" -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+          cmake --build "$PLUGIN_DIR/build" --config "$BUILD_TYPE"
 
       - name: Package plugin
         run: |
-          mkdir -p ${{ github.workspace }}/xPilot/win_x64
-          cp ${{ env.PLUGIN_DIR }}/build/win_x64/xPilot.xpl ${{ github.workspace }}/xPilot/win_x64
-          cp ${{ env.PLUGIN_DIR }}/build/win_x64/xPilot.pdb ${{ github.workspace }}/xPilot/win_x64
-          cp ${{ env.PLUGIN_DIR }}/3rdparty/fmod/fmod.dll ${{ github.workspace }}/xPilot/win_x64
-          cp -R ${{ env.PLUGIN_DIR }}/Resources ${{ github.workspace }}/xPilot/
+          mkdir -p "xPilot/win_x64"
+          cp "$PLUGIN_DIR/build/win_x64/xPilot.xpl" "xPilot/win_x64/"
+          cp "$PLUGIN_DIR/3rdparty/fmod/fmod.dll" "xPilot/win_x64/"
+          cp -R "$PLUGIN_DIR/Resources" xPilot/
+          cp "$PLUGIN_DIR/build/win_x64/xPilot.pdb" xPilot/win_x64/
 
-      ### Build Client ###
+      - name: Cache Qt
+        id: qt-cache
+        uses: actions/cache@v4
+        with:
+          path: qt6
+          key: qt-${{ runner.os }}-${{ runner.arch }}-6.5.2-msvc2019_64-qtmultimedia-aqt3.3.0
 
       - name: Download Qt
-        shell: bash
+        if: steps.qt-cache.outputs.cache-hit != 'true'
         run: |
-          python -m pip install --disable-pip-version-check aqtinstall==3.3.0
-          python -m aqt install-qt windows desktop ${{ env.QT_VERSION }} win64_msvc2019_64 -m qtmultimedia --outputdir qt6
+          python -m venv "$RUNNER_TEMP/aqt-venv"
+          "$RUNNER_TEMP/aqt-venv/Scripts/python.exe" -m pip install --disable-pip-version-check aqtinstall==3.3.0
+          "$RUNNER_TEMP/aqt-venv/Scripts/python.exe" -m aqt install-qt windows desktop "$QT_VERSION" win64_msvc2019_64 -m qtmultimedia --outputdir qt6
 
       - name: Setup Qt
         run: |
-          echo "Qt6_DIR=$(pwd)/qt6/${{ env.QT_VERSION }}/msvc2019_64" >> $env:GITHUB_ENV
-          echo "QT_PLUGIN_PATH=$(pwd)/qt6/${{ env.QT_VERSION }}/msvc2019_64/plugins" >> $env:GITHUB_ENV
-          echo "QML2_IMPORT_PATH=$(pwd)/qt6/${{ env.QT_VERSION }}/msvc2019_64/qml" >> $env:GITHUB_ENV
-          echo "EXTERNAL_LIBS=$(pwd)/dependencies" >> $env:GITHUB_ENV
+          echo "Qt6_HOME=$GITHUB_WORKSPACE/qt6/$QT_VERSION/msvc2019_64" >> "$GITHUB_ENV"
+          echo "$GITHUB_WORKSPACE/qt6/$QT_VERSION/msvc2019_64/bin" >> "$GITHUB_PATH"
 
       - name: Build client
-        working-directory: ${{ env.CLIENT_DIR }}
+        env:
+          VATSIM_CLIENT_ID: ${{ env.RELEASE_BUILD == 'true' && secrets.VATSIM_CLIENT_ID || '0' }}
+          VATSIM_CLIENT_KEY: ${{ env.RELEASE_BUILD == 'true' && secrets.VATSIM_CLIENT_KEY || 'development' }}
+          VATSIM_TOWERVIEW_CLIENT_ID: ${{ env.RELEASE_BUILD == 'true' && secrets.VATSIM_TOWERVIEW_CLIENT_ID || '0' }}
+          CONFIG_ENCRYPTION_KEY: ${{ env.RELEASE_BUILD == 'true' && secrets.CONFIG_ENCRYPTION_KEY || '0' }}
+          ALLOW_AUTH_STUB: ${{ steps.policy.outputs.allow_auth_stub }}
         run: |
-          mkdir build
-          cd build
-          cmake .. `
-            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
-            -DVATSIM_CLIENT_ID=${{ env.VATSIM_CLIENT_ID }} `
-            -DVATSIM_CLIENT_KEY=${{ env.VATSIM_CLIENT_KEY }} `
-            -DVATSIM_TOWERVIEW_CLIENT_ID=${{ env.VATSIM_TOWERVIEW_CLIENT_ID }} `
-            -DCONFIG_ENCRYPTION_KEY=${{ env.CONFIG_ENCRYPTION_KEY }} `
-            -DCMAKE_PREFIX_PATH=${{ env.Qt6_DIR }} `
-            -DCMAKE_LIBRARY_PATH=${{ env.EXTERNAL_LIBS }}/platform/windows/wmf
-          cmake --build . --config ${{ env.BUILD_TYPE }}
+          cmake -S "$CLIENT_DIR" -B "$CLIENT_DIR/build" \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DXPILOT_ALLOW_AUTH_STUB="$ALLOW_AUTH_STUB" \
+            -DVATSIM_CLIENT_ID="$VATSIM_CLIENT_ID" \
+            -DVATSIM_CLIENT_KEY="$VATSIM_CLIENT_KEY" \
+            -DVATSIM_TOWERVIEW_CLIENT_ID="$VATSIM_TOWERVIEW_CLIENT_ID" \
+            -DCONFIG_ENCRYPTION_KEY="$CONFIG_ENCRYPTION_KEY" \
+            -DCMAKE_PREFIX_PATH="$Qt6_HOME" \
+            -DCMAKE_LIBRARY_PATH="$GITHUB_WORKSPACE/dependencies/platform/windows/wmf"
+          cmake --build "$CLIENT_DIR/build" --config "$BUILD_TYPE"
+
+      - name: Deploy Qt and compiler runtime
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC installation not found" }
+          $env:VCINSTALLDIR = "$vs/VC/"
+          & "$env:Qt6_HOME/bin/windeployqt.exe" --release --compiler-runtime --qmldir "$env:CLIENT_DIR/Resources" "$env:CLIENT_DIR/build/Release/xPilot.exe"
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
+          # Some Qt builds deploy a redistributable installer; ship the DLLs
+          # app-locally as well so the portable archive works on a clean machine.
+          $crt = Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
+          if (!$crt) { throw "MSVC compiler runtime directory missing" }
+          Copy-Item "$($crt.FullName)/*.dll" "$env:CLIENT_DIR/build/Release/"
+          foreach ($file in @('Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Qml.dll', 'Qt6Quick.dll', 'platforms/qwindows.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')) {
+            if (!(Test-Path "$env:CLIENT_DIR/build/Release/$file")) { throw "Missing deployed runtime: $file" }
+          }
 
       - name: Get version
-        shell: bash
         run: |
-          echo "XPILOT_VERSION=$(cat xpilot.json | jq -r 'if .is_beta == true then "\(.version.major).\(.version.minor).\(.version.patch)-beta.\(.beta_number)" else "\(.version.major).\(.version.minor).\(.version.patch)" end')" >> $GITHUB_ENV
+          echo "XPILOT_VERSION=$(jq -r 'if .is_beta == true then "\(.version.major).\(.version.minor).\(.version.patch)-beta.\(.beta_number)" else "\(.version.major).\(.version.minor).\(.version.patch)" end' xpilot.json)" >> "$GITHUB_ENV"
 
-      - name: Setup InstallBuilder
-        if: ${{ env.IB_LICENSE != '' }}
-        shell: bash
+      - name: Build installer (release only)
+        if: env.RELEASE_BUILD == 'true'
+        env:
+          IB_LICENSE: ${{ secrets.INSTALLBUILDER_LICENSE }}
         run: |
-          curl -k -L ${{ env.IB_URL }} --output ib.exe
+          umask 077
+          license_file="$RUNNER_TEMP/xpilot-installbuilder-license.xml"
+          trap 'rm -f "$license_file"' EXIT
+          printf '%s' "$IB_LICENSE" > "$license_file"
+          curl --fail --show-error --location "https://releases.installbuilder.com/installbuilder/installbuilder-enterprise-24.3.0-windows-x64-installer.exe" --output "ib.exe"
           ./ib.exe --mode unattended --prefix ../ib
-          ../ib/bin/builder-cli.exe --version
-          echo "$IB_LICENSE" > lic.xml
-          echo "CLIENT_BUILD_DIR=${{ env.CLIENT_DIR }}/build/Release" >> $GITHUB_ENV
-          echo "PLUGIN_BUILD_DIR=${{ github.workspace }}/xPilot" >> $GITHUB_ENV
-          cp "${{ env.CLIENT_DIR }}/icon.ico" "${{ env.CLIENT_DIR }}/build/Release"
-
-      - name: Create installer
-        if: ${{ env.IB_LICENSE != '' }}
-        shell: bash
-        run: |
+          export CLIENT_BUILD_DIR="$CLIENT_DIR/build/Release"
+          export PLUGIN_BUILD_DIR="$GITHUB_WORKSPACE/xPilot"
+          cp "$CLIENT_DIR/icon.ico" "$CLIENT_BUILD_DIR/"
           ../ib/bin/builder-cli.exe build installer/windows.xml \
-              --license lic.xml \
-              --setvars project.outputDirectory=$(pwd) \
-              --setvars project.version=${{ env.XPILOT_VERSION }}
-
-      - name: Rename Installer
-        if: ${{ env.IB_LICENSE != '' }}
-        shell: bash
-        run: |
-          mv xPilot-${{ env.XPILOT_VERSION }}-windows-x64-installer.exe xPilot-${{ env.XPILOT_VERSION }}-Windows.exe
+            --license "$license_file" \
+            --setvars "project.outputDirectory=$GITHUB_WORKSPACE" \
+            --setvars "project.version=$XPILOT_VERSION"
+          mv "xPilot-$XPILOT_VERSION-windows-x64-installer.exe" "xPilot-$XPILOT_VERSION-Windows.exe"
 
       - name: Upload installer artifact
-        if: ${{ env.IB_LICENSE != '' }}
+        if: env.RELEASE_BUILD == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: xPilot-${{ env.XPILOT_VERSION }}-Windows.zip
-          path: |
-            xPilot-${{ env.XPILOT_VERSION }}-Windows.exe
+          path: xPilot-${{ env.XPILOT_VERSION }}-Windows.exe
+          if-no-files-found: error
 
       - name: Create artifacts archive
-        shell: bash
         run: |
           mkdir -p windows/plugin
-          cp -R "${{ github.workspace }}/xPilot" windows/plugin/
-          cp -R "${{ env.CLIENT_DIR }}/build/Release/xPilot.exe" windows/xPilot.exe
+          cp -R xPilot windows/plugin/
+          cp BUILD-STATUS.txt windows/
+          cp -R "$CLIENT_DIR/build/Release/"* windows/
 
-      - name: Upload artifacts
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Windows.zip
-          path: ${{ github.workspace }}/windows
+          name: Windows.zip${{ steps.policy.outputs.artifact_suffix }}
+          path: windows
+          if-no-files-found: error
